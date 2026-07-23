@@ -1,0 +1,9 @@
+{
+  "name": "mpesa-ledger",
+  "version": "1.0.0",
+  "description": "Automatic M-Pesa transaction ledger — receives forwarded SMS, parses and categorizes, deployed as Vercel serverless functions plus a dashboard.",
+  "private": true,
+  "dependencies": {
+    "firebase-admin": "^12.0.0"
+  }
+}
