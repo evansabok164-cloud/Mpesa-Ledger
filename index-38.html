@@ -1,0 +1,779 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>M-Pesa Ledger</title>
+<link rel="manifest" href="manifest.json"/>
+<meta name="theme-color" content="#0B0B0F">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MPesa Ledger">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('sw.js').catch(function(err){
+        console.error('Service worker registration failed:', err);
+      });
+    });
+  }
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+  import { getFirestore, collection, query, orderBy, limit, onSnapshot, doc, updateDoc, addDoc, deleteDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDTImC67gy37sZuTzYjBwlB_82hgHHeLrA",
+    authDomain: "mpesa-ledger-6405d.firebaseapp.com",
+    projectId: "mpesa-ledger-6405d",
+    storageBucket: "mpesa-ledger-6405d.firebasestorage.app",
+    messagingSenderId: "1011963187606",
+    appId: "1:1011963187606:web:8953e9d193012b22d64db7"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  const db = getFirestore(app);
+  const auth = getAuth(app);
+
+  window.LEDGER_FB = { db, collection, query, orderBy, limit, onSnapshot, doc, updateDoc, addDoc, deleteDoc, setDoc, ready: false };
+
+  signInAnonymously(auth).then(()=>{
+    window.LEDGER_FB.ready = true;
+    window.dispatchEvent(new Event('ledgerfb-ready'));
+  }).catch((err)=>{
+    console.error('Firebase auth failed', err);
+  });
+</script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{overscroll-behavior-y:none;background:#0B0B0F;color:#EDEDED;font-family:'Barlow',sans-serif;height:100%;}
+  h1,h2,h3,.num{font-family:'Barlow Condensed',sans-serif;font-weight:800;}
+  #loginScreen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;}
+  #loginScreen h1{font-size:28px;margin-bottom:24px;}
+  .pin-row{display:flex;gap:12px;margin:16px 0;}
+  .pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid #3A3A42;}
+  .pin-dot.filled{background:#4ADE80;border-color:#4ADE80;}
+  #pinInput{position:absolute;opacity:0;pointer-events:none;}
+  .keypad{display:grid;grid-template-columns:repeat(3,72px);gap:14px;margin-top:24px;}
+  .keypad button{width:72px;height:72px;border-radius:50%;background:#1A1A22;color:#EDEDED;font-size:24px;border:1px solid #2A2A32;}
+  .keypad button:active{background:#2A2A32;}
+  #app{display:none;padding:16px;padding-bottom:80px;max-width:640px;margin:0 auto;}
+  #app.show{display:block;}
+  .summary-row{display:flex;gap:10px;margin-bottom:16px;}
+  .summary-card{flex:1;background:#15151C;border-radius:14px;padding:14px;border:1px solid #232330;}
+  .summary-card .label{font-size:12px;color:#9A9AA5;}
+  .summary-card .val{font-size:24px;margin-top:4px;}
+  .summary-card.income .val{color:#4ADE80;}
+  .summary-card.expense .val{color:#F87171;}
+  .summary-card.net .val{color:#60A5FA;}
+  .filters{display:flex;gap:8px;overflow-x:auto;margin-bottom:14px;padding-bottom:4px;}
+  .filter-chip{flex-shrink:0;padding:8px 14px;border-radius:20px;background:#15151C;border:1px solid #232330;font-size:13px;color:#C5C5CD;}
+  .filter-chip.active{background:#2563EB;border-color:#2563EB;color:#fff;}
+  .tx{background:#15151C;border-radius:14px;padding:14px;margin-bottom:10px;border:1px solid #232330;}
+  .tx-top{display:flex;justify-content:space-between;align-items:flex-start;}
+  .tx-name{font-weight:600;font-size:15px;}
+  .tx-amount{font-size:17px;font-weight:700;}
+  .tx-amount.income{color:#4ADE80;}
+  .tx-amount.expense{color:#F87171;}
+  .tx-meta{font-size:12px;color:#8A8A95;margin-top:4px;}
+  .tx-cat{display:inline-block;margin-top:8px;padding:4px 10px;border-radius:8px;background:#1F1F29;font-size:12px;color:#C5C5CD;}
+  .tx-cat.uncategorized{background:#3A2A1A;color:#F0B84A;}
+  .tx.unparsed{border-color:#5A2A2A;}
+  .tx.unparsed .tx-meta{color:#F87171;}
+  #catModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #catModal.open{display:flex;}
+  #editModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #editModal.open{display:flex;}
+  #budgetModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #budgetModal.open{display:flex;}
+  .modal-body{background:#15151C;width:100%;border-radius:20px 20px 0 0;padding:20px;max-height:70vh;overflow-y:auto;}
+  .cat-option{padding:12px;border-radius:10px;margin-bottom:6px;background:#1A1A22;font-size:14px;}
+  .cat-option.selected{background:#2563EB;}
+  input#newCatInput{width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-top:10px;}
+  .btn{display:block;width:100%;padding:14px;border-radius:12px;border:none;font-weight:700;font-size:15px;margin-top:12px;}
+  .btn.green{background:#4ADE80;color:#0B0B0F;}
+  #toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#1F1F29;padding:10px 20px;border-radius:20px;font-size:13px;opacity:0;transition:.3s;pointer-events:none;z-index:1000;}
+  #toast.show{opacity:1;}
+  .section-title{font-size:14px;color:#9A9AA5;margin:18px 0 8px;text-transform:uppercase;letter-spacing:.05em;}
+  #installBanner{display:none;position:fixed;left:16px;right:16px;bottom:16px;background:#1F1F29;border:1px solid #2A2A32;border-radius:14px;padding:14px 16px;align-items:center;gap:12px;z-index:998;}
+  #installBanner.show{display:flex;}
+  #installBanner img{width:40px;height:40px;border-radius:10px;}
+  #installBanner .txt{flex:1;font-size:13px;}
+  #installBanner button{padding:8px 14px;border-radius:10px;background:#4ADE80;color:#0B0B0F;font-weight:700;border:none;font-size:13px;}
+  #installBanner .dismiss{background:none;color:#9A9AA5;padding:8px;font-weight:400;}
+  .period-toggle{display:flex;gap:8px;margin:8px 0 14px;}
+  .period-chip{flex:1;text-align:center;padding:8px;border-radius:10px;background:#15151C;border:1px solid #232330;font-size:13px;color:#C5C5CD;}
+  .period-chip.active{background:#2563EB;border-color:#2563EB;color:#fff;}
+  .period-row{background:#15151C;border-radius:12px;padding:12px 14px;margin-bottom:8px;border:1px solid #232330;}
+  .period-row.selected{border-color:#2563EB;}
+  .period-row-top{display:flex;justify-content:space-between;align-items:center;}
+  .period-label{font-weight:600;font-size:14px;}
+  .period-net{font-size:14px;font-weight:700;color:#F87171;}
+  .period-net.pos{color:#4ADE80;}
+  .period-sub{display:flex;gap:14px;margin-top:6px;font-size:12px;}
+  .period-sub .inc{color:#4ADE80;}
+  .period-sub .exp{color:#F87171;}
+  .period-sub .count{color:#8A8A95;}
+  .period-bar{height:6px;border-radius:3px;background:#232330;margin-top:8px;overflow:hidden;display:flex;}
+  .period-bar .inc-bar{background:#4ADE80;}
+  .period-bar .exp-bar{background:#F87171;}
+  .section-title.row{display:flex;justify-content:space-between;align-items:center;}
+  #clearPeriodBtn{color:#60A5FA;cursor:pointer;text-transform:none;font-size:12px;letter-spacing:normal;}
+  .scope-toggle{display:flex;gap:8px;margin-bottom:14px;}
+  .scope-chip{flex:1;text-align:center;padding:8px;border-radius:10px;background:#15151C;border:1px solid #232330;font-size:13px;color:#C5C5CD;}
+  .scope-chip.active{background:#2563EB;border-color:#2563EB;color:#fff;}
+  #searchInput{width:100%;padding:12px 14px;border-radius:12px;background:#15151C;border:1px solid #232330;color:#EDEDED;font-size:14px;margin-bottom:10px;}
+  #searchInput::placeholder{color:#6A6A75;}
+  .tx-actions{display:flex;gap:10px;margin-top:2px;}
+  .tx-icon-btn{font-size:14px;color:#6A6A75;cursor:pointer;padding:2px 4px;}
+  .tx-icon-btn:active{color:#EDEDED;}
+  .cat-bar-row{margin-bottom:10px;}
+  .cat-bar-top{display:flex;justify-content:space-between;font-size:13px;margin-bottom:4px;}
+  .cat-bar-name{color:#EDEDED;}
+  .cat-bar-amt{color:#C5C5CD;}
+  .cat-bar-track{height:8px;border-radius:4px;background:#1F1F29;overflow:hidden;}
+  .cat-bar-fill{height:100%;background:#2563EB;border-radius:4px;}
+  .budget-row{background:#15151C;border-radius:12px;padding:12px 14px;margin-bottom:8px;border:1px solid #232330;}
+  .budget-row.over{border-color:#5A2A2A;}
+  .budget-row.warn{border-color:#4A3A1A;}
+  .budget-top{display:flex;justify-content:space-between;font-size:13px;margin-bottom:6px;}
+  .budget-badge{font-size:11px;padding:2px 8px;border-radius:8px;margin-left:6px;}
+  .budget-badge.over{background:#3A1A1A;color:#F87171;}
+  .budget-badge.warn{background:#3A2A1A;color:#F0B84A;}
+  .btn.neutral{background:#1F1F29;color:#EDEDED;border:1px solid #2A2A32;}
+  input.budget-input{width:100%;padding:10px;border-radius:8px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;font-size:14px;}
+  .budget-input-row{display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:10px;font-size:13px;}
+  .budget-input-row label{flex:1;color:#C5C5CD;}
+  .budget-input-row input{width:110px;}
+  .manage-link{color:#60A5FA;font-size:12px;cursor:pointer;text-transform:none;letter-spacing:normal;}
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <h1>M-Pesa Ledger</h1>
+  <div class="pin-row" id="pinRow"></div>
+  <input type="tel" id="pinInput" maxlength="4" autocomplete="off">
+  <div class="keypad" id="keypad"></div>
+</div>
+
+<div id="app">
+  <h2 style="margin-bottom:16px;">M-Pesa Ledger</h2>
+
+  <div class="summary-row">
+    <div class="summary-card income"><div class="label">Income</div><div class="val" id="totalIncome">Ksh 0</div></div>
+    <div class="summary-card expense"><div class="label">Expenses</div><div class="val" id="totalExpense">Ksh 0</div></div>
+    <div class="summary-card net"><div class="label">Net</div><div class="val" id="totalNet">Ksh 0</div></div>
+  </div>
+
+  <div class="scope-toggle" id="scopeToggle"></div>
+
+  <div class="filters" id="filterChips"></div>
+
+  <div class="section-title" style="margin-top:0;">Breakdown</div>
+  <div class="period-toggle" id="periodToggle"></div>
+  <div id="periodList"></div>
+
+  <div class="section-title row">
+    <span>By Category</span>
+  </div>
+  <div id="categoryList"></div>
+
+  <div class="section-title row">
+    <span>Budgets</span>
+    <span class="manage-link" onclick="openBudgetModal()">Manage ✎</span>
+  </div>
+  <div id="budgetList"></div>
+
+  <div class="section-title row">
+    <span id="txSectionLabel">Transactions</span>
+    <span style="display:flex;gap:12px;align-items:center;">
+      <span class="manage-link" onclick="exportCSV()">Export CSV</span>
+      <span id="clearPeriodBtn" style="display:none;" onclick="clearPeriodFilter()">Clear ✕</span>
+    </span>
+  </div>
+  <input id="searchInput" type="text" placeholder="Search by name..." oninput="onSearchInput(event)">
+  <div id="txList"></div>
+  <div id="loadMoreWrap"></div>
+</div>
+
+<div id="catModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Set category</h3>
+    <div id="directionPicker" style="display:none;margin-bottom:14px;">
+      <div style="font-size:13px;color:#9A9AA5;margin-bottom:8px;">This transaction is</div>
+      <div style="display:flex;gap:8px;">
+        <div class="cat-option" id="dirIncomeBtn" style="flex:1;text-align:center;" onclick="pickDirection('income')">Income</div>
+        <div class="cat-option" id="dirExpenseBtn" style="flex:1;text-align:center;" onclick="pickDirection('expense')">Expense</div>
+      </div>
+    </div>
+    <div id="catOptions"></div>
+    <input id="newCatInput" placeholder="Or type a new category...">
+    <button class="btn green" onclick="saveCategory()">Save</button>
+  </div>
+</div>
+
+<div id="editModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Edit transaction</h3>
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Name</div>
+    <input id="editNameInput" placeholder="Counterparty name" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:12px;">
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Amount (Ksh)</div>
+    <input id="editAmountInput" type="number" inputmode="decimal" placeholder="0" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;">
+    <button class="btn green" onclick="saveEdit()">Save</button>
+    <button class="btn neutral" onclick="closeEditModal()">Cancel</button>
+  </div>
+</div>
+
+<div id="budgetModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Monthly budgets</h3>
+    <div style="font-size:12px;color:#8A8A95;margin-bottom:14px;">Leave blank for no cap on a category.</div>
+    <div id="budgetInputs"></div>
+    <button class="btn green" onclick="saveBudgets()">Save</button>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="installBanner">
+  <img src="icon-192.png" alt="MPesa Ledger">
+  <div class="txt">Install this app for quick access</div>
+  <button class="dismiss" onclick="dismissInstall()">Later</button>
+  <button onclick="triggerInstall()">Install</button>
+</div>
+
+<script>
+const PIN = '0000'; // change this before real use
+let enteredPin = '';
+let allTx = [];
+let activeFilter = 'all';
+let editingTxId = null;
+let editingCounterparty = null;
+let editingNeedsDirection = false;
+let pickedDirection = null;
+let activePeriod = 'day'; // day | week | month | year
+let selectedPeriodRange = null; // {start,end,label} when a period row is tapped
+let viewScope = 'all'; // all | business | personal
+let searchQuery = '';
+let currentLimit = 500;
+let unsubscribeTx = null;
+let reachedEnd = false;
+let budgetsMap = {}; // { CATEGORY_UPPER: monthlyLimit }
+let editingDeleteId = null;
+const BUSINESS_CATEGORIES = ['RidaSwift Business','Swift Shopper Business'];
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  try{ if(navigator.vibrate) navigator.vibrate(10); }catch(e){}
+  setTimeout(()=>t.classList.remove('show'), 2000);
+}
+
+// ── PIN LOGIN ──
+function renderPinDots(){
+  const row = document.getElementById('pinRow');
+  row.innerHTML = '';
+  for(let i=0;i<4;i++){
+    const d = document.createElement('div');
+    d.className = 'pin-dot' + (i < enteredPin.length ? ' filled' : '');
+    row.appendChild(d);
+  }
+}
+function renderKeypad(){
+  const kp = document.getElementById('keypad');
+  const keys = ['1','2','3','4','5','6','7','8','9','','0','del'];
+  kp.innerHTML = keys.map(k=>{
+    if(k==='') return '<div></div>';
+    if(k==='del') return `<button onclick="pinDel()">&larr;</button>`;
+    return `<button onclick="pinPress('${k}')">${k}</button>`;
+  }).join('');
+}
+function pinPress(k){
+  if(enteredPin.length>=4) return;
+  enteredPin += k;
+  renderPinDots();
+  if(enteredPin.length===4){
+    setTimeout(()=>{
+      if(enteredPin===PIN){
+        document.getElementById('loginScreen').style.display='none';
+        document.getElementById('app').classList.add('show');
+        initLedger();
+      } else {
+        toast('Wrong PIN');
+        enteredPin='';
+        renderPinDots();
+      }
+    }, 150);
+  }
+}
+function pinDel(){ enteredPin = enteredPin.slice(0,-1); renderPinDots(); }
+renderPinDots();
+renderKeypad();
+renderPeriodToggle();
+renderScopeToggle();
+
+// ── LEDGER ──
+function initLedger(){
+  function start(){
+    startTxListener();
+    startBudgetsListener();
+  }
+  if(window.LEDGER_FB && window.LEDGER_FB.ready) start();
+  else window.addEventListener('ledgerfb-ready', start, { once:true });
+}
+
+function startTxListener(){
+  const fb = window.LEDGER_FB;
+  if(unsubscribeTx) unsubscribeTx();
+  const q = fb.query(fb.collection(fb.db,'transactions'), fb.orderBy('receivedAt','desc'), fb.limit(currentLimit));
+  unsubscribeTx = fb.onSnapshot(q, snap=>{
+    allTx = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+    reachedEnd = allTx.length < currentLimit;
+    renderFilters();
+    renderAll();
+  });
+}
+function loadMoreTx(){
+  currentLimit += 300;
+  toast('Loading older transactions...');
+  startTxListener();
+}
+
+function startBudgetsListener(){
+  const fb = window.LEDGER_FB;
+  const q = fb.collection(fb.db,'budgets');
+  fb.onSnapshot(q, snap=>{
+    budgetsMap = {};
+    snap.docs.forEach(d=>{ budgetsMap[d.id] = d.data().monthlyLimit; });
+    renderAll();
+  });
+}
+
+function fmtKsh(n){
+  if(n===null || n===undefined) return 'Ksh 0';
+  return 'Ksh ' + Number(n).toLocaleString('en-KE', { minimumFractionDigits:0, maximumFractionDigits:0 });
+}
+
+function renderFilters(){
+  const cats = ['all','income','expense','unparsed', ...new Set(allTx.map(t=>t.category).filter(Boolean))];
+  const unique = [...new Set(cats)];
+  const chips = document.getElementById('filterChips');
+  chips.innerHTML = unique.map(c=>`<div class="filter-chip ${c===activeFilter?'active':''}" onclick="setFilter('${c.replace(/'/g,"\\'")}')">${c==='all'?'All':c==='income'?'Income':c==='expense'?'Expense':c==='unparsed'?'Needs review':c}</div>`).join('');
+}
+function setFilter(c){ activeFilter = c; renderFilters(); renderAll(); }
+
+// ── SCOPE (business/personal) ──
+function renderScopeToggle(){
+  const el = document.getElementById('scopeToggle');
+  const opts = [['all','All'],['business','Business'],['personal','Personal']];
+  el.innerHTML = opts.map(([v,l])=>`<div class="scope-chip ${viewScope===v?'active':''}" onclick="setScope('${v}')">${l}</div>`).join('');
+}
+function setScope(s){ viewScope = s; renderScopeToggle(); renderAll(); }
+
+// ── SEARCH ──
+function onSearchInput(e){
+  searchQuery = e.target.value.trim().toLowerCase();
+  renderAll();
+}
+
+// ── PERIOD BREAKDOWN ──
+function renderPeriodToggle(){
+  const el = document.getElementById('periodToggle');
+  const types = [['day','Day'],['week','Week'],['month','Month'],['year','Year']];
+  el.innerHTML = types.map(([v,l])=>`<div class="period-chip ${activePeriod===v?'active':''}" onclick="setPeriodType('${v}')">${l}</div>`).join('');
+}
+function setPeriodType(type){
+  activePeriod = type;
+  selectedPeriodRange = null;
+  renderPeriodToggle();
+  renderAll();
+}
+
+// Groups by receivedAt (the webhook's server timestamp), since that's
+// present and reliable on every transaction regardless of whether the
+// SMS itself parsed cleanly.
+function periodBucketFor(ts, type){
+  const d = new Date(ts);
+  if(type==='day'){
+    const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const end = start + 86400000;
+    const label = d.toLocaleDateString('en-KE', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+    return { key:start, start, end, label };
+  }
+  if(type==='week'){
+    const dayIdx = (d.getDay()+6)%7; // Monday = 0
+    const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()-dayIdx).getTime();
+    const end = start + 7*86400000;
+    const weekEnd = new Date(start + 6*86400000);
+    const label = `${new Date(start).toLocaleDateString('en-KE',{day:'numeric',month:'short'})} – ${weekEnd.toLocaleDateString('en-KE',{day:'numeric',month:'short',year:'numeric'})}`;
+    return { key:start, start, end, label };
+  }
+  if(type==='month'){
+    const start = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+    const end = new Date(d.getFullYear(), d.getMonth()+1, 1).getTime();
+    const label = d.toLocaleDateString('en-KE', { month:'long', year:'numeric' });
+    return { key:start, start, end, label };
+  }
+  const start = new Date(d.getFullYear(), 0, 1).getTime();
+  const end = new Date(d.getFullYear()+1, 0, 1).getTime();
+  return { key:start, start, end, label: String(d.getFullYear()) };
+}
+
+function renderPeriods(sourceTx){
+  const groups = new Map();
+  sourceTx.forEach(t=>{
+    if(t.direction!=='income' && t.direction!=='expense') return; // skip unclassified
+    const g = periodBucketFor(t.receivedAt||0, activePeriod);
+    if(!groups.has(g.key)) groups.set(g.key, { ...g, income:0, expense:0, count:0 });
+    const bucket = groups.get(g.key);
+    if(t.direction==='income') bucket.income += (t.amount||0);
+    else bucket.expense += (t.amount||0);
+    bucket.count++;
+  });
+  const sorted = [...groups.values()].sort((a,b)=>b.key-a.key);
+  const list = document.getElementById('periodList');
+  if(sorted.length===0){
+    list.innerHTML = '<div style="color:#8A8A95;padding:4px 0 14px;font-size:13px;">No categorized transactions yet.</div>';
+    return;
+  }
+  list.innerHTML = sorted.map(g=>{
+    const net = g.income - g.expense;
+    const total = (g.income + g.expense) || 1;
+    const incPct = (g.income/total*100).toFixed(1);
+    const expPct = (g.expense/total*100).toFixed(1);
+    const isSelected = selectedPeriodRange && selectedPeriodRange.start===g.start;
+    return `
+    <div class="period-row ${isSelected?'selected':''}" onclick="togglePeriodFilter(${g.start},${g.end},'${g.label.replace(/'/g,"\\'")}')">
+      <div class="period-row-top">
+        <div class="period-label">${g.label}</div>
+        <div class="period-net ${net>=0?'pos':''}">${net>=0?'+':'-'}${fmtKsh(Math.abs(net))}</div>
+      </div>
+      <div class="period-sub">
+        <span class="inc">+${fmtKsh(g.income)}</span>
+        <span class="exp">-${fmtKsh(g.expense)}</span>
+        <span class="count">${g.count} tx</span>
+      </div>
+      <div class="period-bar"><div class="inc-bar" style="width:${incPct}%"></div><div class="exp-bar" style="width:${expPct}%"></div></div>
+    </div>`;
+  }).join('');
+}
+
+function togglePeriodFilter(start, end, label){
+  selectedPeriodRange = (selectedPeriodRange && selectedPeriodRange.start===start) ? null : { start, end, label };
+  renderAll();
+}
+function clearPeriodFilter(){
+  selectedPeriodRange = null;
+  renderAll();
+}
+
+function renderAll(){
+  let filtered = allTx;
+  if(activeFilter==='income') filtered = allTx.filter(t=>t.direction==='income');
+  else if(activeFilter==='expense') filtered = allTx.filter(t=>t.direction==='expense');
+  else if(activeFilter==='unparsed') filtered = allTx.filter(t=>!t.parsed);
+  else if(activeFilter!=='all') filtered = allTx.filter(t=>t.category===activeFilter);
+
+  if(viewScope==='business') filtered = filtered.filter(t=>BUSINESS_CATEGORIES.includes(t.category));
+  else if(viewScope==='personal') filtered = filtered.filter(t=>!BUSINESS_CATEGORIES.includes(t.category));
+
+  if(searchQuery){
+    filtered = filtered.filter(t =>
+      (t.counterpartyName||'').toLowerCase().includes(searchQuery) ||
+      (t.rawText||'').toLowerCase().includes(searchQuery)
+    );
+  }
+
+  renderPeriods(filtered);
+
+  let displayList = filtered;
+  if(selectedPeriodRange){
+    displayList = displayList.filter(t => (t.receivedAt||0) >= selectedPeriodRange.start && (t.receivedAt||0) < selectedPeriodRange.end);
+  }
+
+  renderCategoryBreakdown(displayList);
+  renderBudgetAlerts();
+
+  document.getElementById('txSectionLabel').textContent = selectedPeriodRange ? `Transactions — ${selectedPeriodRange.label}` : 'Transactions';
+  document.getElementById('clearPeriodBtn').style.display = selectedPeriodRange ? 'inline' : 'none';
+
+  // Totals: overall grand total by default (unchanged from before), but
+  // narrow to the selected period once you tap one, so the summary
+  // cards actually answer "how did this week/month look".
+  const totalsSource = selectedPeriodRange ? displayList : allTx;
+  const income = totalsSource.filter(t=>t.direction==='income').reduce((s,t)=>s+(t.amount||0),0);
+  const expense = totalsSource.filter(t=>t.direction==='expense').reduce((s,t)=>s+(t.amount||0),0);
+  document.getElementById('totalIncome').textContent = fmtKsh(income);
+  document.getElementById('totalExpense').textContent = fmtKsh(expense);
+  document.getElementById('totalNet').textContent = fmtKsh(income-expense);
+
+  const list = document.getElementById('txList');
+  if(displayList.length===0){
+    list.innerHTML = '<div style="color:#8A8A95;padding:20px;text-align:center;">No transactions here yet.</div>';
+  } else {
+    list.innerHTML = displayList.map(t=>{
+      const isUncat = (t.category||'').startsWith('Uncategorized');
+      return `
+      <div class="tx ${!t.parsed?'unparsed':''}">
+        <div class="tx-top">
+          <div>
+            <div class="tx-name">${t.counterpartyName || (t.parsed ? 'Unknown' : 'Unrecognized message')}</div>
+            <div class="tx-meta">${t.date||''} ${t.time||''} ${t.code?('&middot; '+t.code):''}</div>
+          </div>
+          <div style="text-align:right;">
+            <div class="tx-amount ${t.direction||''}">${t.amount!=null ? (t.direction==='income'?'+':t.direction==='expense'?'-':'')+fmtKsh(t.amount) : ''}</div>
+            <div class="tx-actions" style="justify-content:flex-end;">
+              <span class="tx-icon-btn" onclick="openEditModal('${t.id}','${(t.counterpartyName||'').replace(/'/g,"\\'")}',${t.amount||0})">&#9998;</span>
+              <span class="tx-icon-btn" onclick="confirmDelete('${t.id}',${t.amount||0})">&#128465;</span>
+            </div>
+          </div>
+        </div>
+        ${t.parsed
+          ? `<div class="tx-cat ${isUncat?'uncategorized':''}" onclick="openCatModal('${t.id}','${(t.counterpartyName||'').replace(/'/g,"\\'")}', false, '${t.direction||''}')">${t.category} &#9998;</div>`
+          : `<div class="tx-meta" style="margin-top:6px;">${t.rawText}</div>
+             <div class="tx-cat" style="margin-top:8px;" onclick="openCatModal('${t.id}','${(t.counterpartyName||'').replace(/'/g,"\\'")}', true, '${t.direction||''}')">${t.category ? t.category+' &#9998;' : 'Set category &amp; type &#9998;'}</div>`
+        }
+      </div>`;
+    }).join('');
+  }
+
+  const loadMoreWrap = document.getElementById('loadMoreWrap');
+  loadMoreWrap.innerHTML = reachedEnd
+    ? ''
+    : '<button class="btn neutral" onclick="loadMoreTx()">Load older transactions</button>';
+}
+
+// ── CATEGORY BREAKDOWN ──
+function renderCategoryBreakdown(sourceTx){
+  const totals = {};
+  sourceTx.forEach(t=>{
+    if(t.direction!=='expense' || !t.category) return;
+    totals[t.category] = (totals[t.category]||0) + (t.amount||0);
+  });
+  const rows = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  const el = document.getElementById('categoryList');
+  if(rows.length===0){
+    el.innerHTML = '<div style="color:#8A8A95;padding:4px 0 14px;font-size:13px;">No expenses in this view yet.</div>';
+    return;
+  }
+  const max = rows[0][1] || 1;
+  el.innerHTML = rows.map(([cat,amt])=>`
+    <div class="cat-bar-row">
+      <div class="cat-bar-top"><span class="cat-bar-name">${cat}</span><span class="cat-bar-amt">${fmtKsh(amt)}</span></div>
+      <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${(amt/max*100).toFixed(1)}%"></div></div>
+    </div>
+  `).join('');
+}
+
+// ── BUDGETS ── (always reflects the current calendar month, regardless of active filters)
+function renderBudgetAlerts(){
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).getTime();
+  const monthEnd = new Date(now.getFullYear(), now.getMonth()+1, 1).getTime();
+  const monthSpend = {};
+  allTx.forEach(t=>{
+    if(t.direction!=='expense' || !t.category) return;
+    const ts = t.receivedAt||0;
+    if(ts < monthStart || ts >= monthEnd) return;
+    monthSpend[t.category] = (monthSpend[t.category]||0) + (t.amount||0);
+  });
+  const budgeted = Object.keys(budgetsMap).filter(k=>budgetsMap[k]>0);
+  const el = document.getElementById('budgetList');
+  if(budgeted.length===0){
+    el.innerHTML = '<div style="color:#8A8A95;padding:4px 0 14px;font-size:13px;">No budgets set yet.</div>';
+    return;
+  }
+  const rows = budgeted.map(catKey=>{
+    const limit = budgetsMap[catKey];
+    const spend = Object.entries(monthSpend).find(([c])=>c.toUpperCase()===catKey);
+    const spent = spend ? spend[1] : 0;
+    const pct = Math.min(100, (spent/limit*100));
+    const over = spent > limit;
+    const warn = !over && spent >= limit*0.9;
+    return { catKey, spent, limit, pct, over, warn };
+  }).sort((a,b)=> (b.spent/b.limit) - (a.spent/a.limit));
+
+  el.innerHTML = rows.map(r=>`
+    <div class="budget-row ${r.over?'over':r.warn?'warn':''}">
+      <div class="budget-top">
+        <span>${r.catKey}${r.over?'<span class="budget-badge over">Over budget</span>':r.warn?'<span class="budget-badge warn">Near limit</span>':''}</span>
+        <span>${fmtKsh(r.spent)} / ${fmtKsh(r.limit)}</span>
+      </div>
+      <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${r.pct.toFixed(1)}%;background:${r.over?'#F87171':r.warn?'#F0B84A':'#4ADE80'};"></div></div>
+    </div>
+  `).join('');
+}
+
+function openBudgetModal(){
+  const el = document.getElementById('budgetInputs');
+  el.innerHTML = COMMON_CATEGORIES.map(cat=>{
+    const key = cat.trim().toUpperCase();
+    const val = budgetsMap[key] || '';
+    return `<div class="budget-input-row"><label>${cat}</label><input class="budget-input" type="number" inputmode="decimal" id="budget_${key}" value="${val}" placeholder="No cap"></div>`;
+  }).join('');
+  document.getElementById('budgetModal').classList.add('open');
+}
+async function saveBudgets(){
+  const fb = window.LEDGER_FB;
+  for(const cat of COMMON_CATEGORIES){
+    const key = cat.trim().toUpperCase();
+    const input = document.getElementById('budget_'+key);
+    const raw = input.value.trim();
+    const val = raw === '' ? 0 : Number(raw);
+    if(val > 0){
+      await fb.setDoc(fb.doc(fb.db,'budgets',key), { monthlyLimit: val, category: cat }, { merge:true });
+    }
+  }
+  document.getElementById('budgetModal').classList.remove('open');
+  toast('Budgets saved');
+}
+document.getElementById('budgetModal').addEventListener('click', e=>{
+  if(e.target.id==='budgetModal') e.target.classList.remove('open');
+});
+
+// ── EDIT / DELETE TRANSACTION ──
+function openEditModal(txId, name, amount){
+  editingTxId = txId;
+  document.getElementById('editNameInput').value = name || '';
+  document.getElementById('editAmountInput').value = amount || '';
+  document.getElementById('editModal').classList.add('open');
+}
+function closeEditModal(){
+  document.getElementById('editModal').classList.remove('open');
+}
+async function saveEdit(){
+  const name = document.getElementById('editNameInput').value.trim();
+  const amount = Number(document.getElementById('editAmountInput').value);
+  if(!name || !amount || amount<=0){ toast('Enter a valid name and amount'); return; }
+  const fb = window.LEDGER_FB;
+  await fb.updateDoc(fb.doc(fb.db,'transactions',editingTxId), { counterpartyName: name, amount });
+  closeEditModal();
+  toast('Transaction updated');
+}
+document.getElementById('editModal').addEventListener('click', e=>{
+  if(e.target.id==='editModal') e.target.classList.remove('open');
+});
+
+async function confirmDelete(txId, amount){
+  if(!confirm(`Delete this Ksh${amount} transaction? This can't be undone.`)) return;
+  const fb = window.LEDGER_FB;
+  await fb.deleteDoc(fb.doc(fb.db,'transactions',txId));
+  toast('Transaction deleted');
+}
+
+// ── CSV EXPORT ──
+function exportCSV(){
+  let filtered = allTx;
+  if(activeFilter==='income') filtered = allTx.filter(t=>t.direction==='income');
+  else if(activeFilter==='expense') filtered = allTx.filter(t=>t.direction==='expense');
+  else if(activeFilter==='unparsed') filtered = allTx.filter(t=>!t.parsed);
+  else if(activeFilter!=='all') filtered = allTx.filter(t=>t.category===activeFilter);
+  if(viewScope==='business') filtered = filtered.filter(t=>BUSINESS_CATEGORIES.includes(t.category));
+  else if(viewScope==='personal') filtered = filtered.filter(t=>!BUSINESS_CATEGORIES.includes(t.category));
+  if(searchQuery){
+    filtered = filtered.filter(t => (t.counterpartyName||'').toLowerCase().includes(searchQuery) || (t.rawText||'').toLowerCase().includes(searchQuery));
+  }
+  if(selectedPeriodRange){
+    filtered = filtered.filter(t => (t.receivedAt||0) >= selectedPeriodRange.start && (t.receivedAt||0) < selectedPeriodRange.end);
+  }
+  if(filtered.length===0){ toast('Nothing to export'); return; }
+
+  const header = ['Date','Time','Name','Direction','Amount','Category','Code'];
+  const rows = filtered.map(t => [
+    t.date||'', t.time||'', (t.counterpartyName||'').replace(/,/g,' '), t.direction||'', t.amount||'', (t.category||'').replace(/,/g,' '), t.code||''
+  ]);
+  const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mpesa-ledger-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── RECATEGORIZE ──
+const COMMON_CATEGORIES = ['Groceries','Transport','Bills - Electricity','Bills - Water','Bills - Internet','Airtime & Data','Health','Rent','School Fees','RidaSwift Business','Swift Shopper Business','Sacco / Chama','Loan','Cash Withdrawal','Cash Deposit','Family Support','Other Income','Other Expense'];
+
+function openCatModal(txId, counterparty, needsDirection, currentDirection){
+  editingTxId = txId;
+  editingCounterparty = counterparty;
+  editingNeedsDirection = !!needsDirection;
+  pickedDirection = currentDirection || null;
+  const opts = document.getElementById('catOptions');
+  opts.innerHTML = COMMON_CATEGORIES.map(c=>`<div class="cat-option" onclick="pickCategory(this,'${c.replace(/'/g,"\\'")}')">${c}</div>`).join('');
+  document.getElementById('newCatInput').value='';
+  const picker = document.getElementById('directionPicker');
+  if(editingNeedsDirection){
+    picker.style.display='block';
+    document.getElementById('dirIncomeBtn').classList.toggle('selected', pickedDirection==='income');
+    document.getElementById('dirExpenseBtn').classList.toggle('selected', pickedDirection==='expense');
+  } else {
+    picker.style.display='none';
+  }
+  document.getElementById('catModal').classList.add('open');
+}
+function pickDirection(dir){
+  pickedDirection = dir;
+  document.getElementById('dirIncomeBtn').classList.toggle('selected', dir==='income');
+  document.getElementById('dirExpenseBtn').classList.toggle('selected', dir==='expense');
+}
+let pickedCategory = null;
+function pickCategory(el, cat){
+  document.querySelectorAll('.cat-option').forEach(o=>o.classList.remove('selected'));
+  el.classList.add('selected');
+  pickedCategory = cat;
+  document.getElementById('newCatInput').value = cat;
+}
+async function saveCategory(){
+  const cat = document.getElementById('newCatInput').value.trim();
+  if(!cat){ toast('Enter a category'); return; }
+  if(editingNeedsDirection && !pickedDirection){ toast('Choose Income or Expense'); return; }
+  const fb = window.LEDGER_FB;
+  const updateData = { category: cat, categorySource:'manual' };
+  if(editingNeedsDirection) updateData.direction = pickedDirection;
+  await fb.updateDoc(fb.doc(fb.db,'transactions',editingTxId), updateData);
+  try{
+    const body = { transactionId: editingTxId, category: cat, counterpartyName: editingCounterparty };
+    if(editingNeedsDirection) body.direction = pickedDirection;
+    await fetch('/api/recategorize', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+  }catch(e){ console.error(e); }
+  document.getElementById('catModal').classList.remove('open');
+  toast('Updated');
+}
+document.getElementById('catModal').addEventListener('click', e=>{
+  if(e.target.id==='catModal') e.target.classList.remove('open');
+});
+
+// ── INSTALL PROMPT ──
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  if(!localStorage.getItem('ml_install_dismissed')){
+    document.getElementById('installBanner').classList.add('show');
+  }
+});
+function triggerInstall(){
+  document.getElementById('installBanner').classList.remove('show');
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.then(()=>{ deferredInstallPrompt = null; });
+  }
+}
+function dismissInstall(){
+  document.getElementById('installBanner').classList.remove('show');
+  localStorage.setItem('ml_install_dismissed','1');
+}
+</script>
+</body>
+</html>
