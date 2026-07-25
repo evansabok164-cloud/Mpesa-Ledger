@@ -42,6 +42,19 @@ module.exports = async (req, res) => {
 
     const parsed = parseMpesaSms(smsText);
 
+    // Duplicate protection: every M-Pesa message has a unique transaction
+    // code (e.g. "SFC1A2B3C4"). If the forwarding app retries a send, or
+    // resends after a restart, we'd otherwise log the same transaction
+    // twice. Only check when we actually got a code — unparsed messages
+    // don't have a reliable one to dedupe on.
+    if (parsed.code) {
+      const existing = await db.collection('transactions').where('code', '==', parsed.code).limit(1).get();
+      if (!existing.empty) {
+        res.status(200).json({ success: true, duplicate: true, id: existing.docs[0].id });
+        return;
+      }
+    }
+
     let categoryResult = { category: 'Uncategorized', source: 'none' };
     if (parsed.parsed) {
       categoryResult = await categorize(db, parsed.counterpartyName, parsed.direction);
