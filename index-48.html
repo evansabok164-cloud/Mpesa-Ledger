@@ -1,0 +1,1484 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>M-Pesa Ledger</title>
+<link rel="manifest" href="manifest.json"/>
+<meta name="theme-color" content="#0B0B0F">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="MPesa Ledger">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function(){
+      navigator.serviceWorker.register('sw.js').catch(function(err){
+        console.error('Service worker registration failed:', err);
+      });
+    });
+  }
+</script>
+<link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Barlow:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script type="module">
+  import { initializeApp } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-app.js";
+  import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, collection, query, orderBy, limit, onSnapshot, doc, getDoc, updateDoc, addDoc, deleteDoc, setDoc } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-firestore.js";
+  import { getAuth, signInAnonymously } from "https://www.gstatic.com/firebasejs/12.16.0/firebase-auth.js";
+
+  const firebaseConfig = {
+    apiKey: "AIzaSyDTImC67gy37sZuTzYjBwlB_82hgHHeLrA",
+    authDomain: "mpesa-ledger-6405d.firebaseapp.com",
+    projectId: "mpesa-ledger-6405d",
+    storageBucket: "mpesa-ledger-6405d.firebasestorage.app",
+    messagingSenderId: "1011963187606",
+    appId: "1:1011963187606:web:8953e9d193012b22d64db7"
+  };
+
+  const app = initializeApp(firebaseConfig);
+  // Persistent local cache: transactions/settings/etc load instantly from
+  // IndexedDB (even offline) and sync with the server in the background.
+  // Multi-tab manager keeps things consistent if the app is open in more
+  // than one tab/window at once.
+  const db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
+  const auth = getAuth(app);
+
+  window.LEDGER_FB = { db, collection, query, orderBy, limit, onSnapshot, doc, getDoc, updateDoc, addDoc, deleteDoc, setDoc, ready: false };
+
+  signInAnonymously(auth).then(()=>{
+    window.LEDGER_FB.ready = true;
+    window.dispatchEvent(new Event('ledgerfb-ready'));
+  }).catch((err)=>{
+    console.error('Firebase auth failed', err);
+  });
+</script>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{overscroll-behavior-y:none;background:#0B0B0F;color:#EDEDED;font-family:'Barlow',sans-serif;height:100%;}
+  h1,h2,h3,.num{font-family:'Barlow Condensed',sans-serif;font-weight:800;}
+  #loginScreen{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:24px;}
+  #loginScreen h1{font-size:28px;margin-bottom:24px;}
+  .pin-row{display:flex;gap:12px;margin:16px 0;}
+  .pin-dot{width:16px;height:16px;border-radius:50%;border:2px solid #3A3A42;}
+  .pin-dot.filled{background:#4ADE80;border-color:#4ADE80;}
+  #pinInput{position:absolute;opacity:0;pointer-events:none;}
+  .keypad{display:grid;grid-template-columns:repeat(3,72px);gap:14px;margin-top:24px;}
+  .keypad button{width:72px;height:72px;border-radius:50%;background:#1A1A22;color:#EDEDED;font-size:24px;border:1px solid #2A2A32;}
+  .keypad button:active{background:#2A2A32;}
+  #app{display:none;padding:16px;padding-bottom:80px;max-width:640px;margin:0 auto;}
+  #app.show{display:block;}
+  .summary-row{display:flex;gap:10px;margin-bottom:16px;}
+  .summary-card{flex:1;background:#15151C;border-radius:14px;padding:14px;border:1px solid #232330;}
+  .summary-card .label{font-size:12px;color:#9A9AA5;}
+  .summary-card .val{font-size:24px;margin-top:4px;}
+  .summary-card.income .val{color:#4ADE80;}
+  .summary-card.expense .val{color:#F87171;}
+  .summary-card.net .val{color:#FBBF24;}
+  .bc-stat-val.income{color:#4ADE80;}
+  .bc-stat-val.expense{color:#F87171;}
+  .filters{display:flex;gap:8px;overflow-x:auto;margin-bottom:14px;padding-bottom:4px;}
+  .filter-chip{flex-shrink:0;padding:8px 14px;border-radius:20px;background:#15151C;border:1px solid #232330;font-size:13px;color:#C5C5CD;}
+  .filter-chip.active{background:#D97706;border-color:#D97706;color:#fff;}
+  .tx{background:#15151C;border-radius:14px;padding:14px;margin-bottom:10px;border:1px solid #232330;}
+  .tx-top{display:flex;justify-content:space-between;align-items:flex-start;}
+  .tx-name{font-weight:600;font-size:15px;}
+  .tx-amount{font-size:17px;font-weight:700;}
+  .tx-amount.income{color:#4ADE80;}
+  .tx-amount.expense{color:#F87171;}
+  .tx-meta{font-size:12px;color:#8A8A95;margin-top:4px;}
+  .tx-cat{display:inline-block;margin-top:8px;padding:4px 10px;border-radius:8px;background:#1F1F29;font-size:12px;color:#C5C5CD;}
+  .tx-cat.uncategorized{background:#3A2A1A;color:#F0B84A;}
+  .tx.unparsed{border-color:#5A2A2A;}
+  .tx.unparsed .tx-meta{color:#F87171;}
+  #catModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #catModal.open{display:flex;}
+  #editModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #editModal.open{display:flex;}
+  #addEntryModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #addEntryModal.open{display:flex;}
+  #settingsModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #settingsModal.open{display:flex;}
+  #loansModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #loansModal.open{display:flex;}
+  #statementModal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;align-items:flex-end;z-index:999;}
+  #statementModal.open{display:flex;}
+  #toast{position:fixed;bottom:84px;left:50%;transform:translateX(-50%);background:#1F1F29;padding:10px 20px;border-radius:20px;font-size:13px;opacity:0;transition:.3s;pointer-events:none;z-index:1000;}
+
+  /* Bottom navigation */
+  #bottomNav{position:fixed;left:0;right:0;bottom:0;height:64px;background:#111117;border-top:1px solid #232330;display:flex;align-items:stretch;z-index:900;padding-bottom:env(safe-area-inset-bottom);}
+  .nav-tab{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px;color:#6A6A75;font-size:10px;background:none;border:none;}
+  .nav-tab .nav-icon{font-size:20px;line-height:1;}
+  .nav-tab.active{color:#FBBF24;}
+  .nav-tab.nav-add{position:relative;}
+  .nav-tab.nav-add .nav-icon{width:48px;height:48px;border-radius:50%;background:#D97706;color:#fff;display:flex;align-items:center;justify-content:center;font-size:26px;margin-top:-22px;box-shadow:0 4px 14px rgba(217,119,6,.5);}
+  body{padding-bottom:76px;}
+
+  /* Balance card */
+  #balanceCard{background:linear-gradient(160deg,#15151C,#1A1A22);border-radius:18px;border:1px solid #232330;padding:20px;margin-bottom:16px;}
+  #balanceCard .bc-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+  #balanceCard .bc-brand{display:flex;align-items:center;gap:10px;}
+  #balanceCard .bc-logo{width:32px;height:32px;border-radius:50%;object-fit:cover;border:2px solid #D97706;}
+  #balanceCard .bc-name{font-weight:700;font-size:14px;}
+  #balanceCard .bc-since{font-size:11px;color:#8A8A95;}
+  #balanceCard .bc-label{font-size:12px;color:#8A8A95;margin-bottom:6px;}
+  #balanceCard .bc-balance-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:18px;}
+  #balanceCard .bc-balance{font-family:'Barlow Condensed',sans-serif;font-size:36px;font-weight:800;letter-spacing:.01em;}
+  #balanceCard .bc-eye{background:#1F1F29;border:1px solid #2A2A32;border-radius:50%;width:36px;height:36px;color:#C5C5CD;font-size:16px;flex-shrink:0;}
+  #balanceCard .bc-divider{height:1px;background:#232330;margin-bottom:14px;}
+  #balanceCard .bc-stats{display:flex;justify-content:space-between;}
+  #balanceCard .bc-stat-label{font-size:11px;color:#8A8A95;margin-bottom:4px;}
+  #balanceCard .bc-stat-val{font-size:15px;font-weight:700;}
+
+  /* Category icons */
+  .cat-icon{display:inline-flex;align-items:center;justify-content:center;width:20px;margin-right:6px;}
+  .tx-icon-circle{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;margin-right:12px;}
+  .tx-icon-circle.income{background:rgba(74,222,128,.15);color:#4ADE80;}
+  .tx-icon-circle.expense{background:rgba(248,113,113,.15);color:#F87171;}
+  .tx-icon-circle.neutral{background:rgba(154,154,165,.15);color:#9A9AA5;}
+  .tx-row-flex{display:flex;align-items:flex-start;}
+  .tx-row-flex .tx-body{flex:1;min-width:0;}
+  .preset-chip{padding:8px 14px;border-radius:20px;background:#15151C;border:1px solid #232330;font-size:13px;color:#C5C5CD;}
+  .preset-chip.active{background:#D97706;border-color:#D97706;color:#fff;}
+  .progress-card{background:#15151C;border-radius:12px;padding:14px;margin-bottom:14px;border:1px solid #232330;}
+  .progress-top{display:flex;justify-content:space-between;font-size:14px;margin-bottom:8px;}
+  .progress-track{height:10px;border-radius:5px;background:#1F1F29;overflow:hidden;}
+  .progress-fill{height:100%;border-radius:5px;background:#4ADE80;}
+  .progress-fill.over{background:#FBBF24;}
+  .progress-sub{font-size:12px;color:#8A8A95;margin-top:6px;}
+  #reminderControl{background:#15151C;border-radius:12px;padding:14px;margin-bottom:14px;border:1px solid #232330;}
+  #reminderControl input[type=time]{background:#1A1A22;border:1px solid #2A2A32;color:#fff;border-radius:8px;padding:8px;margin-right:10px;}
+  #eodBanner{background:#1F1F29;border:1px solid #4ADE80;border-radius:12px;padding:14px;margin-bottom:14px;display:none;}
+  #eodBanner.show{display:block;}
+  #offlineBanner{display:none;background:#3A2A1A;color:#F0B84A;text-align:center;font-size:12px;padding:8px;border-radius:10px;margin-bottom:14px;}
+  #offlineBanner.show{display:block;}
+  .trip-controls{display:flex;align-items:center;gap:16px;justify-content:center;padding:6px 0;}
+  .trip-btn{width:44px;height:44px;border-radius:50%;background:#1F1F29;color:#EDEDED;font-size:22px;border:1px solid #2A2A32;}
+  .trip-count{font-size:28px;font-weight:700;min-width:60px;text-align:center;}
+  .trip-sub{text-align:center;font-size:12px;color:#8A8A95;margin-top:6px;}
+  .loan-card{background:#15151C;border-radius:12px;padding:14px;margin-bottom:10px;border:1px solid #232330;}
+  .loan-card-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;}
+  .loan-name{font-size:14px;font-weight:600;}
+  .loan-del{color:#6A6A75;font-size:14px;cursor:pointer;}
+  #statementResult{background:#fff;color:#111;border-radius:12px;padding:20px;margin-top:14px;}
+  #statementResult .s-header{text-align:center;margin-bottom:16px;}
+  #statementResult .s-app{font-weight:700;font-size:16px;}
+  #statementResult .s-period{font-size:12px;color:#555;margin-top:2px;}
+  #statementResult .s-row{display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid #eee;font-size:14px;}
+  #statementResult .s-cat{font-size:13px;color:#333;padding:4px 0;}
+  #statementResult .s-footer{text-align:center;font-size:11px;color:#888;margin-top:16px;}
+  .modal-body{background:#15151C;width:100%;border-radius:20px 20px 0 0;padding:20px;max-height:70vh;overflow-y:auto;}
+  .cat-option{padding:12px;border-radius:10px;margin-bottom:6px;background:#1A1A22;font-size:14px;}
+  .cat-option.selected{background:#D97706;}
+  input#newCatInput{width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-top:10px;}
+  .btn{display:block;width:100%;padding:14px;border-radius:12px;border:none;font-weight:700;font-size:15px;margin-top:12px;}
+  .btn.green{background:#4ADE80;color:#0B0B0F;}
+  #toast.show{opacity:1;}
+  .section-title{font-size:14px;color:#9A9AA5;margin:18px 0 8px;text-transform:uppercase;letter-spacing:.05em;}
+  #installBanner{display:none;position:fixed;left:16px;right:16px;bottom:76px;background:#1F1F29;border:1px solid #2A2A32;border-radius:14px;padding:14px 16px;align-items:center;gap:12px;z-index:998;}
+  #installBanner.show{display:flex;}
+  #installBanner img{width:40px;height:40px;border-radius:10px;}
+  #installBanner .txt{flex:1;font-size:13px;}
+  #installBanner button{padding:8px 14px;border-radius:10px;background:#4ADE80;color:#0B0B0F;font-weight:700;border:none;font-size:13px;}
+  #installBanner .dismiss{background:none;color:#9A9AA5;padding:8px;font-weight:400;}
+  .period-toggle{display:flex;gap:8px;margin:8px 0 14px;}
+  .period-chip{flex:1;text-align:center;padding:8px;border-radius:10px;background:#15151C;border:1px solid #232330;font-size:13px;color:#C5C5CD;}
+  .period-chip.active{background:#D97706;border-color:#D97706;color:#fff;}
+  .period-table{width:100%;border-collapse:collapse;background:#15151C;border:1px solid #232330;border-radius:12px;overflow:hidden;font-size:12.5px;}
+  .period-table th{padding:9px 10px;font-size:11px;color:#8A8A95;text-transform:uppercase;letter-spacing:.04em;text-align:right;border-bottom:1px solid #232330;}
+  .period-table th.period-table-label{text-align:left;}
+  .period-table td{padding:11px 10px;border-bottom:1px solid #1F1F29;white-space:nowrap;}
+  .period-table tr:last-child td{border-bottom:none;}
+  .period-table-row.selected{background:#1F1710;}
+  .period-table-label{text-align:left;font-weight:600;color:#EDEDED;}
+  .period-table-in{color:#4ADE80;text-align:right;}
+  .period-table-out{color:#F87171;text-align:right;}
+  .period-table-net{font-weight:700;color:#F87171;text-align:right;}
+  .period-table-net.pos{color:#4ADE80;}
+  .period-table-count{color:#8A8A95;text-align:right;}
+  .section-title.row{display:flex;justify-content:space-between;align-items:center;}
+  #clearPeriodBtn{color:#FBBF24;cursor:pointer;text-transform:none;font-size:12px;letter-spacing:normal;}
+  .scope-toggle{display:flex;gap:8px;margin-bottom:14px;}
+  .scope-chip{flex:1;text-align:center;padding:8px;border-radius:10px;background:#15151C;border:1px solid #232330;font-size:13px;color:#C5C5CD;}
+  .scope-chip.active{background:#D97706;border-color:#D97706;color:#fff;}
+  #searchInput{width:100%;padding:12px 14px;border-radius:12px;background:#15151C;border:1px solid #232330;color:#EDEDED;font-size:14px;margin-bottom:10px;}
+  #searchInput::placeholder{color:#6A6A75;}
+  .tx-actions{display:flex;gap:10px;margin-top:2px;}
+  .tx-icon-btn{font-size:14px;color:#6A6A75;cursor:pointer;padding:2px 4px;}
+  .tx-icon-btn:active{color:#EDEDED;}
+  .cat-table{width:100%;border-collapse:collapse;background:#15151C;border:1px solid #232330;border-radius:12px;overflow:hidden;}
+  .cat-table tr{border-bottom:1px solid #1F1F29;}
+  .cat-table tr:last-child{border-bottom:none;}
+  .cat-table td{padding:11px 14px;font-size:14px;}
+  .cat-table-name{color:#EDEDED;}
+  .cat-table-amt{color:#C5C5CD;text-align:right;white-space:nowrap;}
+  .btn.neutral{background:#1F1F29;color:#EDEDED;border:1px solid #2A2A32;}
+  .manage-link{color:#FBBF24;font-size:12px;cursor:pointer;text-transform:none;letter-spacing:normal;}
+  .about-blurb{font-size:13px;color:#9A9AA5;line-height:1.5;margin:10px 0 14px;max-width:320px;margin-left:auto;margin-right:auto;}
+  .copyright{font-size:12px;color:#6A6A75;line-height:1.6;}
+</style>
+</head>
+<body>
+
+<div id="loginScreen">
+  <h1>M-Pesa Ledger</h1>
+  <div id="pinSubtitle" style="color:#9A9AA5;font-size:14px;margin-bottom:16px;min-height:18px;"></div>
+  <div class="pin-row" id="pinRow"></div>
+  <input type="tel" id="pinInput" maxlength="4" autocomplete="off">
+  <div class="keypad" id="keypad"></div>
+</div>
+
+<div id="app">
+  <div id="balanceCard">
+    <div class="bc-top">
+      <div class="bc-brand">
+        <img class="bc-logo" src="data:image/jpeg;base64,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" alt="Evans Abok">
+        <div>
+          <div class="bc-name">Evans Mpesa Ledger</div>
+          <div class="bc-since" id="bcSince"></div>
+        </div>
+      </div>
+    </div>
+    <div class="bc-label">Account Balance</div>
+    <div class="bc-balance-row">
+      <div class="bc-balance" id="bcBalance">Ksh &bull;&bull;&bull;&bull;&bull;&bull;</div>
+      <button class="bc-eye" id="bcEyeBtn" onclick="toggleBalanceVisible()">&#128065;</button>
+    </div>
+    <div class="bc-divider"></div>
+    <div class="bc-stats">
+      <div><div class="bc-stat-label">In</div><div class="bc-stat-val income" id="totalIncome">Ksh 0</div></div>
+      <div><div class="bc-stat-label">Out</div><div class="bc-stat-val expense" id="totalExpense">Ksh 0</div></div>
+      <div><div class="bc-stat-label">Net</div><div class="bc-stat-val" id="totalNet">Ksh 0</div></div>
+    </div>
+  </div>
+
+  <div id="offlineBanner">You're offline — showing the last synced data. New M-Pesa messages will appear once you're back online.</div>
+
+  <div id="eodBanner">
+    <div style="font-weight:600;margin-bottom:4px;">📒 Close out today's books</div>
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:10px;">Log any cash fares or expenses you haven't added yet.</div>
+    <button class="btn green" onclick="dismissEodBanner()">Done for today</button>
+  </div>
+
+  <div class="section-title row">
+    <span>Today's Target</span>
+    <span class="manage-link" onclick="openSettingsModal()">Edit ✎</span>
+  </div>
+  <div id="targetProgress"></div>
+
+  <div class="section-title row">
+    <span>Trips Today</span>
+  </div>
+  <div id="tripProgress"></div>
+
+  <div class="section-title row">
+    <span>Loans</span>
+    <span class="manage-link" onclick="openLoansModal()">+ Add loan</span>
+  </div>
+  <div id="loanProgress"></div>
+
+  <div class="section-title row">
+    <span>Income Statement</span>
+  </div>
+  <button class="btn neutral" style="margin-bottom:14px;" onclick="openStatementModal()">Generate shareable statement</button>
+
+  <div class="scope-toggle" id="scopeToggle"></div>
+
+  <div class="filters" id="filterChips"></div>
+
+  <div class="section-title" style="margin-top:0;">Breakdown</div>
+  <div class="period-toggle" id="periodToggle"></div>
+  <div id="periodList"></div>
+
+  <div class="section-title row" id="categoriesAnchor">
+    <span>By Category</span>
+  </div>
+  <div id="categoryList"></div>
+
+  <div class="section-title row">
+    <span>End-of-day Reminder</span>
+  </div>
+  <div id="reminderControl"></div>
+
+  <div class="section-title row" id="transactionsAnchor">
+    <span id="txSectionLabel">Transactions</span>
+    <span style="display:flex;gap:12px;align-items:center;">
+      <span class="manage-link" onclick="exportCSV()">Export CSV</span>
+      <span id="clearPeriodBtn" style="display:none;" onclick="clearPeriodFilter()">Clear ✕</span>
+    </span>
+  </div>
+  <input id="searchInput" type="text" placeholder="Search by name..." oninput="onSearchInput(event)">
+  <div id="txList"></div>
+  <div id="loadMoreWrap"></div>
+
+  <div class="section-title row" id="profileAnchor">
+    <span>Profile</span>
+  </div>
+  <div id="profileSection">
+    <div class="about-blurb" style="text-align:center;">Automatically tracks your M-Pesa income and expenses straight from incoming SMS messages — no manual entry needed. Every transaction is parsed, categorized, and summarized by day, week, month, and year.</div>
+    <div class="copyright" style="text-align:center;">
+      &copy; 2026 Evans Mpesa Ledger. All rights reserved.<br>
+      Designed &amp; Developed by Evans Abok<br>
+      🇰🇪 Proudly Kenyan
+    </div>
+  </div>
+
+</div>
+
+<div id="bottomNav">
+  <button class="nav-tab active" id="navHome" onclick="navTo('balanceCard','navHome')"><span class="nav-icon">&#127968;</span>Home</button>
+  <button class="nav-tab" id="navTx" onclick="navTo('transactionsAnchor','navTx')"><span class="nav-icon">&#128179;</span>Transactions</button>
+  <button class="nav-tab nav-add" onclick="openAddEntryModal()"><span class="nav-icon">+</span></button>
+  <button class="nav-tab" id="navCat" onclick="navTo('categoriesAnchor','navCat')"><span class="nav-icon">&#128193;</span>Categories</button>
+  <button class="nav-tab" id="navProfile" onclick="navTo('profileAnchor','navProfile')"><span class="nav-icon">&#128100;</span>Profile</button>
+</div>
+
+<div id="catModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Set category</h3>
+    <div id="directionPicker" style="display:none;margin-bottom:14px;">
+      <div style="font-size:13px;color:#9A9AA5;margin-bottom:8px;">This transaction is</div>
+      <div style="display:flex;gap:8px;">
+        <div class="cat-option" id="dirIncomeBtn" style="flex:1;text-align:center;" onclick="pickDirection('income')">Income</div>
+        <div class="cat-option" id="dirExpenseBtn" style="flex:1;text-align:center;" onclick="pickDirection('expense')">Expense</div>
+      </div>
+    </div>
+    <div id="catOptions"></div>
+    <input id="newCatInput" placeholder="Or type a new category...">
+    <div id="catLoanPickerWrap" style="display:none;margin-top:12px;">
+      <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Which loan is this for?</div>
+      <select id="catLoanSelect" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;"></select>
+    </div>
+    <button class="btn green" onclick="saveCategory()">Save</button>
+  </div>
+</div>
+
+<div id="editModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Edit transaction</h3>
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Name</div>
+    <input id="editNameInput" placeholder="Counterparty name" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:12px;">
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Amount (Ksh)</div>
+    <input id="editAmountInput" type="number" inputmode="decimal" placeholder="0" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;">
+    <button class="btn green" onclick="saveEdit()">Save</button>
+    <button class="btn neutral" onclick="closeEditModal()">Cancel</button>
+  </div>
+</div>
+
+<div id="addEntryModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Add entry</h3>
+    <div class="period-toggle" id="entryDirectionToggle" style="margin-bottom:14px;"></div>
+    <div id="entryPresets" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px;"></div>
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Amount (Ksh)</div>
+    <input id="entryAmountInput" type="number" inputmode="decimal" placeholder="0" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:12px;">
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Note / name (optional)</div>
+    <input id="entryNoteInput" placeholder="e.g. Fare from town to Kapseret" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:12px;">
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Category</div>
+    <select id="entryCategorySelect" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:12px;" onchange="onEntryCategoryChange()"></select>
+    <div id="entryLoanPickerWrap" style="display:none;margin-bottom:16px;">
+      <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Which loan is this for?</div>
+      <select id="entryLoanSelect" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;"></select>
+    </div>
+    <button class="btn green" onclick="saveManualEntry()">Save</button>
+    <button class="btn neutral" onclick="closeAddEntryModal()">Cancel</button>
+  </div>
+</div>
+
+<div id="settingsModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Daily target &amp; security</h3>
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Daily income target (Ksh)</div>
+    <input id="settingsTargetInput" type="number" inputmode="decimal" placeholder="e.g. 1500" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:20px;">
+    <button class="btn green" onclick="saveSettings()">Save</button>
+    <button class="btn neutral" onclick="closeSettingsModal()">Cancel</button>
+    <div style="border-top:1px solid #232330;margin:18px 0 14px;"></div>
+    <div class="manage-link" style="text-align:center;display:block;" onclick="changePin()">Change PIN</div>
+  </div>
+</div>
+
+<div id="loansModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Add a loan</h3>
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Name</div>
+    <input id="loanNameInput" placeholder="e.g. Bike loan, Sacco loan" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:12px;">
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Total amount owed (Ksh)</div>
+    <input id="loanTotalInput" type="number" inputmode="decimal" placeholder="e.g. 120000" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:12px;">
+    <div style="font-size:13px;color:#9A9AA5;margin-bottom:4px;">Already paid before adding it here (Ksh)</div>
+    <input id="loanStartingPaidInput" type="number" inputmode="decimal" placeholder="0" style="width:100%;padding:12px;border-radius:10px;background:#1A1A22;border:1px solid #2A2A32;color:#fff;margin-bottom:6px;">
+    <div style="font-size:12px;color:#6A6A75;margin-bottom:16px;">Payments you log against this loan from now on add on top of this.</div>
+    <button class="btn green" onclick="saveLoan()">Add loan</button>
+    <button class="btn neutral" onclick="closeLoansModal()">Cancel</button>
+  </div>
+</div>
+
+<div id="statementModal">
+  <div class="modal-body">
+    <h3 style="margin-bottom:14px;">Income statement</h3>
+    <div style="font-size:12px;color:#8A8A95;margin-bottom:12px;">Only covers currently loaded transactions — use "Load older transactions" first if you need a period further back.</div>
+    <div class="period-toggle" id="statementPeriodToggle" style="margin-bottom:14px;"></div>
+    <button class="btn green" onclick="generateStatement()">Generate</button>
+    <div id="statementResult" style="display:none;"></div>
+    <div id="statementActions" style="display:none;margin-top:14px;">
+      <button class="btn green" onclick="shareStatement()">Share / Save Image</button>
+      <button class="btn neutral" onclick="closeStatementModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<div id="installBanner">
+  <img src="icon-192.png" alt="MPesa Ledger">
+  <div class="txt">Install this app for quick access</div>
+  <button class="dismiss" onclick="dismissInstall()">Later</button>
+  <button onclick="triggerInstall()">Install</button>
+</div>
+
+<script>
+let enteredPin = '';
+let allTx = [];
+let activeFilter = 'all';
+let editingTxId = null;
+let editingCounterparty = null;
+let editingNeedsDirection = false;
+let pickedDirection = null;
+let activePeriod = 'day'; // day | week | month | year
+let selectedPeriodRange = null; // {start,end,label} when a period row is tapped
+let viewScope = 'all'; // all | business | personal
+let searchQuery = '';
+let currentLimit = 500;
+let unsubscribeTx = null;
+let reachedEnd = false;
+let editingDeleteId = null;
+let appSettings = {}; // { dailyTarget, pinHash }
+let entryDirection = 'income';
+let entryCategory = '';
+const BUSINESS_CATEGORIES = ['RidaSwift Business','Swift Shopper Business'];
+
+function toast(msg){
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show');
+  try{ if(navigator.vibrate) navigator.vibrate(10); }catch(e){}
+  setTimeout(()=>t.classList.remove('show'), 2000);
+}
+
+function updateOfflineBanner(){
+  document.getElementById('offlineBanner').classList.toggle('show', !navigator.onLine);
+}
+window.addEventListener('online', updateOfflineBanner);
+window.addEventListener('offline', updateOfflineBanner);
+updateOfflineBanner();
+
+// ── PIN LOGIN ──
+// No PIN is stored in this file. On first run you set your own PIN,
+// which is hashed (SHA-256) before being saved to Firestore — the raw
+// PIN is never written anywhere, so viewing this page's source can't
+// reveal it.
+let pinMode = 'loading'; // loading | setup | confirm | login
+let storedPinHash = null;
+let pendingNewPin = '';
+
+async function sha256Hex(str){
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return [...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+
+function updatePinSubtitle(){
+  const sub = document.getElementById('pinSubtitle');
+  sub.textContent = {
+    loading: 'Loading...',
+    setup: 'Create a 4-digit PIN',
+    confirm: 'Confirm your PIN',
+    login: 'Enter PIN',
+  }[pinMode] || '';
+}
+
+function initPinScreen(){
+  const fb = window.LEDGER_FB;
+  fb.getDoc(fb.doc(fb.db,'settings','general')).then(snap=>{
+    storedPinHash = (snap.exists() && snap.data().pinHash) ? snap.data().pinHash : null;
+    pinMode = storedPinHash ? 'login' : 'setup';
+    updatePinSubtitle();
+  }).catch(()=>{
+    // Offline on first-ever load with no cached PIN yet — fall back to
+    // setup mode so the person isn't locked out; it'll sync once online.
+    pinMode = 'setup';
+    updatePinSubtitle();
+  });
+}
+
+function renderPinDots(){
+  const row = document.getElementById('pinRow');
+  row.innerHTML = '';
+  for(let i=0;i<4;i++){
+    const d = document.createElement('div');
+    d.className = 'pin-dot' + (i < enteredPin.length ? ' filled' : '');
+    row.appendChild(d);
+  }
+}
+function renderKeypad(){
+  const kp = document.getElementById('keypad');
+  const keys = ['1','2','3','4','5','6','7','8','9','','0','del'];
+  kp.innerHTML = keys.map(k=>{
+    if(k==='') return '<div></div>';
+    if(k==='del') return `<button onclick="pinDel()">&larr;</button>`;
+    return `<button onclick="pinPress('${k}')">${k}</button>`;
+  }).join('');
+}
+function pinPress(k){
+  if(pinMode==='loading') return;
+  if(enteredPin.length>=4) return;
+  enteredPin += k;
+  renderPinDots();
+  if(enteredPin.length===4){
+    setTimeout(async ()=>{
+      if(pinMode==='setup'){
+        pendingNewPin = enteredPin;
+        enteredPin = '';
+        pinMode = 'confirm';
+        updatePinSubtitle();
+        renderPinDots();
+      } else if(pinMode==='confirm'){
+        if(enteredPin===pendingNewPin){
+          const hash = await sha256Hex(enteredPin);
+          const fb = window.LEDGER_FB;
+          await fb.setDoc(fb.doc(fb.db,'settings','general'), { pinHash: hash }, { merge:true });
+          storedPinHash = hash;
+          unlockApp();
+        } else {
+          toast("PINs didn't match — try again");
+          pendingNewPin = '';
+          enteredPin = '';
+          pinMode = 'setup';
+          updatePinSubtitle();
+          renderPinDots();
+        }
+      } else { // login
+        const hash = await sha256Hex(enteredPin);
+        if(hash===storedPinHash){
+          unlockApp();
+        } else {
+          toast('Wrong PIN');
+          enteredPin='';
+          renderPinDots();
+        }
+      }
+    }, 150);
+  }
+}
+function pinDel(){ enteredPin = enteredPin.slice(0,-1); renderPinDots(); }
+function unlockApp(){
+  document.getElementById('loginScreen').style.display='none';
+  document.getElementById('app').classList.add('show');
+  enteredPin='';
+  initLedger();
+}
+function changePin(){
+  document.getElementById('app').classList.remove('show');
+  document.getElementById('loginScreen').style.display='flex';
+  enteredPin='';
+  pendingNewPin='';
+  pinMode='setup';
+  updatePinSubtitle();
+  renderPinDots();
+  closeSettingsModal();
+}
+window.addEventListener('ledgerfb-ready', initPinScreen);
+if(window.LEDGER_FB && window.LEDGER_FB.ready) initPinScreen();
+renderPinDots();
+renderKeypad();
+renderPeriodToggle();
+renderScopeToggle();
+renderReminderControl();
+
+// ── LEDGER ──
+function initLedger(){
+  function start(){
+    startTxListener();
+    startSettingsListener();
+    startLoansListener();
+    startTripsListener();
+    checkEodReminder();
+  }
+  if(window.LEDGER_FB && window.LEDGER_FB.ready) start();
+  else window.addEventListener('ledgerfb-ready', start, { once:true });
+}
+
+function startTxListener(){
+  const fb = window.LEDGER_FB;
+  if(unsubscribeTx) unsubscribeTx();
+  const q = fb.query(fb.collection(fb.db,'transactions'), fb.orderBy('receivedAt','desc'), fb.limit(currentLimit));
+  unsubscribeTx = fb.onSnapshot(q, snap=>{
+    allTx = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+    reachedEnd = allTx.length < currentLimit;
+    renderFilters();
+    renderAll();
+  });
+}
+function loadMoreTx(){
+  currentLimit += 300;
+  toast('Loading older transactions...');
+  startTxListener();
+}
+
+function startSettingsListener(){
+  const fb = window.LEDGER_FB;
+  fb.onSnapshot(fb.doc(fb.db,'settings','general'), snap=>{
+    appSettings = snap.exists() ? snap.data() : {};
+    renderAll();
+  });
+}
+
+function fmtKsh(n){
+  if(n===null || n===undefined) return 'Ksh 0';
+  return 'Ksh ' + Number(n).toLocaleString('en-KE', { minimumFractionDigits:0, maximumFractionDigits:0 });
+}
+
+// ── CATEGORY ICONS ──
+const CATEGORY_ICONS = {
+  'Groceries':'🛒','Transport':'🚌','Bills - Electricity':'💡','Bills - Water':'🚿',
+  'Bills - Internet':'📶','Airtime & Data':'📱','Health':'🩺','Rent':'🏠','School Fees':'🎓',
+  'RidaSwift Business':'🏍️','Swift Shopper Business':'🛍️','Sacco / Chama':'🤝','Loan':'💳',
+  'Fuel':'⛽','Bike Service':'🔧','Insurance':'🛡️','License & Permit':'📄',
+  'Cash Fare Income':'💵','Cash Withdrawal':'🏧','Cash Deposit':'🏦','Family Support':'❤️',
+  'Other Income':'💰','Other Expense':'📦',
+};
+function categoryIcon(cat){ return CATEGORY_ICONS[cat] || (cat && cat.startsWith('Uncategorized') ? '❔' : '🏷️'); }
+
+// ── BOTTOM NAV ──
+function navTo(anchorId, tabId){
+  document.querySelectorAll('.nav-tab').forEach(t=>t.classList.remove('active'));
+  const tab = document.getElementById(tabId);
+  if(tab) tab.classList.add('active');
+  const el = document.getElementById(anchorId);
+  if(el) el.scrollIntoView({ behavior:'smooth', block:'start' });
+}
+
+// ── BALANCE CARD ──
+let balanceVisible = localStorage.getItem('balanceVisible') !== 'false';
+function toggleBalanceVisible(){
+  balanceVisible = !balanceVisible;
+  localStorage.setItem('balanceVisible', String(balanceVisible));
+  renderBalanceCard();
+}
+function renderBalanceCard(){
+  // Most recent transaction that actually carried a balance reading.
+  const withBalance = allTx.filter(t=>t.balance!=null).sort((a,b)=>(b.receivedAt||0)-(a.receivedAt||0));
+  const latestBalance = withBalance.length ? withBalance[0].balance : null;
+  const balEl = document.getElementById('bcBalance');
+  if(!balanceVisible){
+    balEl.textContent = 'Ksh ••••••';
+  } else if(latestBalance!=null){
+    balEl.textContent = fmtKsh(latestBalance);
+  } else {
+    balEl.textContent = '—';
+  }
+  document.getElementById('bcEyeBtn').textContent = balanceVisible ? '👁' : '🙈';
+
+  if(allTx.length>0){
+    const earliest = allTx.reduce((min,t)=> (t.receivedAt||Infinity) < (min.receivedAt||Infinity) ? t : min, allTx[0]);
+    const d = new Date(earliest.receivedAt||Date.now());
+    document.getElementById('bcSince').textContent = 'Since ' + d.toLocaleDateString('en-KE',{ day:'numeric', month:'long', year:'numeric' });
+  }
+}
+
+function renderFilters(){
+  const cats = ['all','income','expense','unparsed', ...new Set(allTx.map(t=>t.category).filter(Boolean))];
+  const unique = [...new Set(cats)];
+  const chips = document.getElementById('filterChips');
+  chips.innerHTML = unique.map(c=>`<div class="filter-chip ${c===activeFilter?'active':''}" onclick="setFilter('${c.replace(/'/g,"\\'")}')">${c==='all'?'All':c==='income'?'Income':c==='expense'?'Expense':c==='unparsed'?'Needs review':c}</div>`).join('');
+}
+function setFilter(c){ activeFilter = c; renderFilters(); renderAll(); }
+
+// ── SCOPE (business/personal) ──
+function renderScopeToggle(){
+  const el = document.getElementById('scopeToggle');
+  const opts = [['all','All'],['business','Business'],['personal','Personal']];
+  el.innerHTML = opts.map(([v,l])=>`<div class="scope-chip ${viewScope===v?'active':''}" onclick="setScope('${v}')">${l}</div>`).join('');
+}
+function setScope(s){ viewScope = s; renderScopeToggle(); renderAll(); }
+
+// ── SEARCH ──
+function onSearchInput(e){
+  searchQuery = e.target.value.trim().toLowerCase();
+  renderAll();
+}
+
+// ── PERIOD BREAKDOWN ──
+function renderPeriodToggle(){
+  const el = document.getElementById('periodToggle');
+  const types = [['day','Day'],['week','Week'],['month','Month'],['year','Year']];
+  el.innerHTML = types.map(([v,l])=>`<div class="period-chip ${activePeriod===v?'active':''}" onclick="setPeriodType('${v}')">${l}</div>`).join('');
+}
+function setPeriodType(type){
+  activePeriod = type;
+  selectedPeriodRange = null;
+  renderPeriodToggle();
+  renderAll();
+}
+
+// Groups by receivedAt (the webhook's server timestamp), since that's
+// present and reliable on every transaction regardless of whether the
+// SMS itself parsed cleanly.
+function periodBucketFor(ts, type){
+  const d = new Date(ts);
+  if(type==='day'){
+    const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const end = start + 86400000;
+    const label = d.toLocaleDateString('en-KE', { weekday:'short', day:'numeric', month:'short', year:'numeric' });
+    return { key:start, start, end, label };
+  }
+  if(type==='week'){
+    const dayIdx = (d.getDay()+6)%7; // Monday = 0
+    const start = new Date(d.getFullYear(), d.getMonth(), d.getDate()-dayIdx).getTime();
+    const end = start + 7*86400000;
+    const weekEnd = new Date(start + 6*86400000);
+    const label = `${new Date(start).toLocaleDateString('en-KE',{day:'numeric',month:'short'})} – ${weekEnd.toLocaleDateString('en-KE',{day:'numeric',month:'short',year:'numeric'})}`;
+    return { key:start, start, end, label };
+  }
+  if(type==='month'){
+    const start = new Date(d.getFullYear(), d.getMonth(), 1).getTime();
+    const end = new Date(d.getFullYear(), d.getMonth()+1, 1).getTime();
+    const label = d.toLocaleDateString('en-KE', { month:'long', year:'numeric' });
+    return { key:start, start, end, label };
+  }
+  const start = new Date(d.getFullYear(), 0, 1).getTime();
+  const end = new Date(d.getFullYear()+1, 0, 1).getTime();
+  return { key:start, start, end, label: String(d.getFullYear()) };
+}
+
+function renderPeriods(sourceTx){
+  const groups = new Map();
+  sourceTx.forEach(t=>{
+    if(t.direction!=='income' && t.direction!=='expense') return; // skip unclassified
+    const g = periodBucketFor(t.receivedAt||0, activePeriod);
+    if(!groups.has(g.key)) groups.set(g.key, { ...g, income:0, expense:0, count:0 });
+    const bucket = groups.get(g.key);
+    if(t.direction==='income') bucket.income += (t.amount||0);
+    else bucket.expense += (t.amount||0);
+    bucket.count++;
+  });
+  const sorted = [...groups.values()].sort((a,b)=>b.key-a.key);
+  const list = document.getElementById('periodList');
+  if(sorted.length===0){
+    list.innerHTML = '<div style="color:#8A8A95;padding:4px 0 14px;font-size:13px;">No categorized transactions yet.</div>';
+    return;
+  }
+  const rowsHtml = sorted.map(g=>{
+    const net = g.income - g.expense;
+    const isSelected = selectedPeriodRange && selectedPeriodRange.start===g.start;
+    return `
+    <tr class="period-table-row ${isSelected?'selected':''}" onclick="togglePeriodFilter(${g.start},${g.end},'${g.label.replace(/'/g,"\\'")}')">
+      <td class="period-table-label">${g.label}</td>
+      <td class="period-table-in">+${fmtKsh(g.income)}</td>
+      <td class="period-table-out">-${fmtKsh(g.expense)}</td>
+      <td class="period-table-net ${net>=0?'pos':''}">${net>=0?'+':'-'}${fmtKsh(Math.abs(net))}</td>
+      <td class="period-table-count">${g.count}</td>
+    </tr>`;
+  }).join('');
+  list.innerHTML = `<table class="period-table"><thead><tr>
+      <th class="period-table-label">Period</th>
+      <th class="period-table-in">In</th>
+      <th class="period-table-out">Out</th>
+      <th class="period-table-net">Net</th>
+      <th class="period-table-count">Tx</th>
+    </tr></thead><tbody>${rowsHtml}</tbody></table>`;
+}
+
+function togglePeriodFilter(start, end, label){
+  selectedPeriodRange = (selectedPeriodRange && selectedPeriodRange.start===start) ? null : { start, end, label };
+  renderAll();
+}
+function clearPeriodFilter(){
+  selectedPeriodRange = null;
+  renderAll();
+}
+
+function renderAll(){
+  renderBalanceCard();
+  let filtered = allTx;
+  if(activeFilter==='income') filtered = allTx.filter(t=>t.direction==='income');
+  else if(activeFilter==='expense') filtered = allTx.filter(t=>t.direction==='expense');
+  else if(activeFilter==='unparsed') filtered = allTx.filter(t=>!t.parsed);
+  else if(activeFilter!=='all') filtered = allTx.filter(t=>t.category===activeFilter);
+
+  if(viewScope==='business') filtered = filtered.filter(t=>BUSINESS_CATEGORIES.includes(t.category));
+  else if(viewScope==='personal') filtered = filtered.filter(t=>!BUSINESS_CATEGORIES.includes(t.category));
+
+  if(searchQuery){
+    filtered = filtered.filter(t =>
+      (t.counterpartyName||'').toLowerCase().includes(searchQuery) ||
+      (t.rawText||'').toLowerCase().includes(searchQuery)
+    );
+  }
+
+  renderPeriods(filtered);
+
+  let displayList = filtered;
+  if(selectedPeriodRange){
+    displayList = displayList.filter(t => (t.receivedAt||0) >= selectedPeriodRange.start && (t.receivedAt||0) < selectedPeriodRange.end);
+  }
+
+  renderCategoryBreakdown(displayList);
+  renderTargetProgress();
+  renderTripCounter();
+  renderLoanProgress();
+
+  document.getElementById('txSectionLabel').textContent = selectedPeriodRange ? `Transactions — ${selectedPeriodRange.label}` : 'Transactions';
+  document.getElementById('clearPeriodBtn').style.display = selectedPeriodRange ? 'inline' : 'none';
+
+  // Totals: overall grand total by default (unchanged from before), but
+  // narrow to the selected period once you tap one, so the summary
+  // cards actually answer "how did this week/month look".
+  const totalsSource = selectedPeriodRange ? displayList : allTx;
+  const income = totalsSource.filter(t=>t.direction==='income').reduce((s,t)=>s+(t.amount||0),0);
+  const expense = totalsSource.filter(t=>t.direction==='expense').reduce((s,t)=>s+(t.amount||0),0);
+  document.getElementById('totalIncome').textContent = fmtKsh(income);
+  document.getElementById('totalExpense').textContent = fmtKsh(expense);
+  document.getElementById('totalNet').textContent = fmtKsh(income-expense);
+
+  const list = document.getElementById('txList');
+  if(displayList.length===0){
+    list.innerHTML = '<div style="color:#8A8A95;padding:20px;text-align:center;">No transactions here yet.</div>';
+  } else {
+    list.innerHTML = displayList.map(t=>{
+      const isUncat = (t.category||'').startsWith('Uncategorized');
+      const iconClass = t.direction==='income' ? 'income' : t.direction==='expense' ? 'expense' : 'neutral';
+      const arrow = t.direction==='income' ? '&#8600;' : t.direction==='expense' ? '&#8599;' : '&#8226;';
+      return `
+      <div class="tx ${!t.parsed?'unparsed':''}">
+        <div class="tx-row-flex">
+          <div class="tx-icon-circle ${iconClass}">${arrow}</div>
+          <div class="tx-body">
+            <div class="tx-top">
+              <div>
+                <div class="tx-name">${t.counterpartyName || (t.parsed ? 'Unknown' : 'Unrecognized message')}</div>
+                <div class="tx-meta">${t.date||''} ${t.time||''} ${t.code?('&middot; '+t.code):''}</div>
+                ${t.balance!=null ? `<div class="tx-meta" style="margin-top:2px;">Balance after: ${fmtKsh(t.balance)}</div>` : ''}
+              </div>
+              <div style="text-align:right;">
+                <div class="tx-amount ${t.direction||''}">${t.amount!=null ? (t.direction==='income'?'+':t.direction==='expense'?'-':'')+fmtKsh(t.amount) : ''}</div>
+                <div class="tx-actions" style="justify-content:flex-end;">
+                  <span class="tx-icon-btn" onclick="openEditModal('${t.id}','${(t.counterpartyName||'').replace(/'/g,"\\'")}',${t.amount||0})">&#9998;</span>
+                  <span class="tx-icon-btn" onclick="confirmDelete('${t.id}',${t.amount||0})">&#128465;</span>
+                </div>
+              </div>
+            </div>
+            ${t.parsed
+              ? `<div class="tx-cat ${isUncat?'uncategorized':''}" onclick="openCatModal('${t.id}','${(t.counterpartyName||'').replace(/'/g,"\\'")}', false, '${t.direction||''}')"><span class="cat-icon">${categoryIcon(t.category)}</span>${t.category} &#9998;</div>`
+              : `<div class="tx-meta" style="margin-top:6px;">${t.rawText}</div>
+                 <div class="tx-cat" style="margin-top:8px;" onclick="openCatModal('${t.id}','${(t.counterpartyName||'').replace(/'/g,"\\'")}', true, '${t.direction||''}')">${t.category ? `<span class="cat-icon">${categoryIcon(t.category)}</span>${t.category} &#9998;` : 'Set category &amp; type &#9998;'}</div>`
+            }
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+  }
+
+  const loadMoreWrap = document.getElementById('loadMoreWrap');
+  loadMoreWrap.innerHTML = reachedEnd
+    ? ''
+    : '<button class="btn neutral" onclick="loadMoreTx()">Load older transactions</button>';
+}
+
+// ── CATEGORY BREAKDOWN ──
+function renderCategoryBreakdown(sourceTx){
+  const totals = {};
+  sourceTx.forEach(t=>{
+    if(t.direction!=='expense' || !t.category) return;
+    totals[t.category] = (totals[t.category]||0) + (t.amount||0);
+  });
+  const rows = Object.entries(totals).sort((a,b)=>b[1]-a[1]);
+  const el = document.getElementById('categoryList');
+  if(rows.length===0){
+    el.innerHTML = '<div style="color:#8A8A95;padding:4px 0 14px;font-size:13px;">No expenses in this view yet.</div>';
+    return;
+  }
+  const rowsHtml = rows.map(([cat,amt])=>`
+    <tr>
+      <td class="cat-table-name"><span class="cat-icon">${categoryIcon(cat)}</span>${cat}</td>
+      <td class="cat-table-amt">${fmtKsh(amt)}</td>
+    </tr>
+  `).join('');
+  el.innerHTML = `<table class="cat-table"><tbody>${rowsHtml}</tbody></table>`;
+}
+
+// ── DAILY TARGET ──
+function renderTargetProgress(){
+  const el = document.getElementById('targetProgress');
+  const target = Number(appSettings.dailyTarget) || 0;
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayEnd = dayStart + 86400000;
+  const todayIncome = allTx
+    .filter(t=>t.direction==='income' && (t.receivedAt||0) >= dayStart && (t.receivedAt||0) < dayEnd)
+    .reduce((s,t)=>s+(t.amount||0),0);
+
+  if(target<=0){
+    el.innerHTML = `<div class="progress-card"><div class="progress-sub">No target set yet. Tap Edit to set your daily income target.</div></div>`;
+    return;
+  }
+  const pct = Math.min(100, (todayIncome/target*100));
+  el.innerHTML = `
+    <div class="progress-card">
+      <div class="progress-top"><span>${fmtKsh(todayIncome)} / ${fmtKsh(target)}</span><span>${pct.toFixed(0)}%</span></div>
+      <div class="progress-track"><div class="progress-fill ${pct>=100?'over':''}" style="width:${pct}%"></div></div>
+      ${pct>=100
+        ? `<div class="progress-sub">Target reached today 🎉</div><button class="btn neutral" style="margin-top:10px;" onclick="shareTargetHit(${todayIncome},${target})">Share</button>`
+        : `<div class="progress-sub">Ksh ${fmtKsh(Math.max(0,target-todayIncome)).replace('Ksh ','')} to go</div>`}
+    </div>`;
+}
+
+// ── LOANS (multiple) ──
+let loansList = []; // [{id, name, totalOwed, startingPaid}]
+function startLoansListener(){
+  const fb = window.LEDGER_FB;
+  fb.onSnapshot(fb.collection(fb.db,'loans'), snap=>{
+    loansList = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+    renderAll();
+  });
+}
+function renderLoanProgress(){
+  const el = document.getElementById('loanProgress');
+  if(loansList.length===0){
+    el.innerHTML = `<div class="progress-card"><div class="progress-sub">No loans added yet. Tap "+ Add loan" above.</div></div>`;
+    return;
+  }
+  const onlyOneLoan = loansList.length===1;
+
+  // With only one loan there's no ambiguity — every "Loan" payment counts
+  // toward it automatically, whether or not it has a loanId (covers SMS
+  // messages that got auto-categorized without ever prompting for one).
+  // With multiple loans, only explicitly-assigned payments count, and the
+  // rest show as a separate bucket you can assign by tapping the category
+  // tag on that transaction and re-picking "Loan".
+  const unassignedPaid = onlyOneLoan ? 0 : allTx
+    .filter(t=>t.direction==='expense' && t.category==='Loan' && !t.loanId)
+    .reduce((s,t)=>s+(t.amount||0),0);
+
+  const cards = loansList.map(loan=>{
+    const totalOwed = Number(loan.totalOwed)||0;
+    const startingPaid = Number(loan.startingPaid)||0;
+    const loggedPaid = allTx
+      .filter(t=>t.direction==='expense' && t.category==='Loan' && (t.loanId===loan.id || (onlyOneLoan && !t.loanId)))
+      .reduce((s,t)=>s+(t.amount||0),0);
+    const paid = startingPaid + loggedPaid;
+    const remaining = Math.max(0, totalOwed - paid);
+    const pct = totalOwed>0 ? Math.min(100,(paid/totalOwed*100)) : 0;
+    return `
+      <div class="loan-card">
+        <div class="loan-card-top">
+          <span class="loan-name">${loan.name}</span>
+          <span class="loan-del" onclick="deleteLoan('${loan.id}')">&#128465;</span>
+        </div>
+        <div class="progress-top"><span>${fmtKsh(paid)} paid of ${fmtKsh(totalOwed)}</span><span>${pct.toFixed(0)}%</span></div>
+        <div class="progress-track"><div class="progress-fill" style="width:${pct}%;background:#FBBF24;"></div></div>
+        <div class="progress-sub">${totalOwed>0 && remaining<=0 ? 'Fully paid off 🎉' : fmtKsh(remaining)+' remaining'}</div>
+      </div>`;
+  }).join('');
+
+  el.innerHTML = cards + (unassignedPaid>0 ? `
+    <div class="progress-card"><div class="progress-sub">Ksh ${fmtKsh(unassignedPaid).replace('Ksh ','')} in "Loan" payments aren't assigned to a specific loan — tap the category tag on those transactions and re-pick "Loan" to choose which one.</div></div>` : '');
+}
+function openLoansModal(){
+  document.getElementById('loanNameInput').value = '';
+  document.getElementById('loanTotalInput').value = '';
+  document.getElementById('loanStartingPaidInput').value = '';
+  document.getElementById('loansModal').classList.add('open');
+}
+function closeLoansModal(){
+  document.getElementById('loansModal').classList.remove('open');
+}
+async function saveLoan(){
+  const name = document.getElementById('loanNameInput').value.trim();
+  const totalOwed = Number(document.getElementById('loanTotalInput').value) || 0;
+  const startingPaid = Number(document.getElementById('loanStartingPaidInput').value) || 0;
+  if(!name || totalOwed<=0){ toast('Enter a name and total amount owed'); return; }
+  const fb = window.LEDGER_FB;
+  await fb.addDoc(fb.collection(fb.db,'loans'), { name, totalOwed, startingPaid, createdAt: Date.now() });
+  closeLoansModal();
+  toast('Loan added');
+}
+async function deleteLoan(id){
+  if(!confirm('Remove this loan? Its logged payments stay in your transactions, just unlinked.')) return;
+  const fb = window.LEDGER_FB;
+  await fb.deleteDoc(fb.doc(fb.db,'loans',id));
+  toast('Loan removed');
+}
+document.getElementById('loansModal').addEventListener('click', e=>{
+  if(e.target.id==='loansModal') e.target.classList.remove('open');
+});
+
+// ── TRIP COUNTER ──
+let tripLogs = [];
+function startTripsListener(){
+  const fb = window.LEDGER_FB;
+  const q = fb.query(fb.collection(fb.db,'tripLogs'), fb.orderBy('receivedAt','desc'), fb.limit(300));
+  fb.onSnapshot(q, snap=>{
+    tripLogs = snap.docs.map(d=>({ id:d.id, ...d.data() }));
+    renderAll();
+  });
+}
+async function shareTargetHit(income, target){
+  const text = `🏍️ Hit my daily target today: Ksh ${income.toLocaleString('en-KE')} of Ksh ${target.toLocaleString('en-KE')}! — via Evans Mpesa Ledger`;
+  if(navigator.share){
+    try{ await navigator.share({ text }); return; }catch(e){ /* cancelled */ }
+  } else if(navigator.clipboard){
+    await navigator.clipboard.writeText(text);
+    toast('Copied to clipboard');
+  }
+}
+
+function renderTripCounter(){
+  const el = document.getElementById('tripProgress');
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const dayEnd = dayStart + 86400000;
+  const todayTrips = tripLogs.filter(t=>(t.receivedAt||0)>=dayStart && (t.receivedAt||0)<dayEnd);
+  const count = todayTrips.length;
+  const todayIncome = allTx
+    .filter(t=>t.direction==='income' && (t.receivedAt||0)>=dayStart && (t.receivedAt||0)<dayEnd)
+    .reduce((s,t)=>s+(t.amount||0),0);
+  const avg = count>0 ? todayIncome/count : 0;
+  el.innerHTML = `
+    <div class="progress-card">
+      <div class="trip-controls">
+        <button class="trip-btn" onclick="removeTrip()">&minus;</button>
+        <div class="trip-count">${count}</div>
+        <button class="trip-btn" onclick="addTrip()">+</button>
+      </div>
+      <div class="trip-sub">${count>0 ? 'Avg fare: '+fmtKsh(avg)+' / trip' : 'Tap + after each ride'}</div>
+    </div>`;
+}
+async function addTrip(){
+  const fb = window.LEDGER_FB;
+  await fb.addDoc(fb.collection(fb.db,'tripLogs'), { receivedAt: Date.now() });
+}
+async function removeTrip(){
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const todayTrips = tripLogs.filter(t=>(t.receivedAt||0)>=dayStart).sort((a,b)=>b.receivedAt-a.receivedAt);
+  if(todayTrips.length===0) return;
+  const fb = window.LEDGER_FB;
+  await fb.deleteDoc(fb.doc(fb.db,'tripLogs',todayTrips[0].id));
+}
+
+// ── SETTINGS (daily target + PIN) ──
+function openSettingsModal(){
+  document.getElementById('settingsTargetInput').value = appSettings.dailyTarget || '';
+  document.getElementById('settingsModal').classList.add('open');
+}
+function closeSettingsModal(){
+  document.getElementById('settingsModal').classList.remove('open');
+}
+async function saveSettings(){
+  const fb = window.LEDGER_FB;
+  const dailyTarget = Number(document.getElementById('settingsTargetInput').value) || 0;
+  await fb.setDoc(fb.doc(fb.db,'settings','general'), { dailyTarget }, { merge:true });
+  closeSettingsModal();
+  toast('Settings saved');
+}
+document.getElementById('settingsModal').addEventListener('click', e=>{
+  if(e.target.id==='settingsModal') e.target.classList.remove('open');
+});
+
+// ── SHAREABLE INCOME STATEMENT ──
+let statementPeriod = 'month';
+function renderStatementPeriodToggle(){
+  const el = document.getElementById('statementPeriodToggle');
+  const opts = [['month','This Month'],['last_month','Last Month'],['3m','Last 3 Months'],['6m','Last 6 Months'],['year','This Year']];
+  el.innerHTML = opts.map(([v,l])=>`<div class="period-chip ${statementPeriod===v?'active':''}" onclick="setStatementPeriod('${v}')">${l}</div>`).join('');
+}
+function setStatementPeriod(p){ statementPeriod = p; renderStatementPeriodToggle(); }
+function openStatementModal(){
+  document.getElementById('statementResult').style.display = 'none';
+  document.getElementById('statementActions').style.display = 'none';
+  renderStatementPeriodToggle();
+  document.getElementById('statementModal').classList.add('open');
+}
+function closeStatementModal(){
+  document.getElementById('statementModal').classList.remove('open');
+}
+function statementRange(){
+  const now = new Date();
+  if(statementPeriod==='month') return [new Date(now.getFullYear(),now.getMonth(),1).getTime(), Date.now()];
+  if(statementPeriod==='last_month') return [new Date(now.getFullYear(),now.getMonth()-1,1).getTime(), new Date(now.getFullYear(),now.getMonth(),1).getTime()];
+  if(statementPeriod==='3m') return [new Date(now.getFullYear(),now.getMonth()-3,1).getTime(), Date.now()];
+  if(statementPeriod==='6m') return [new Date(now.getFullYear(),now.getMonth()-6,1).getTime(), Date.now()];
+  return [new Date(now.getFullYear(),0,1).getTime(), Date.now()];
+}
+function generateStatement(){
+  const [start,end] = statementRange();
+  const inRange = allTx.filter(t=>(t.receivedAt||0)>=start && (t.receivedAt||0)<end);
+  const income = inRange.filter(t=>t.direction==='income').reduce((s,t)=>s+(t.amount||0),0);
+  const expense = inRange.filter(t=>t.direction==='expense').reduce((s,t)=>s+(t.amount||0),0);
+  const catTotals = {};
+  inRange.forEach(t=>{ if(t.direction==='expense' && t.category) catTotals[t.category]=(catTotals[t.category]||0)+(t.amount||0); });
+  const topCats = Object.entries(catTotals).sort((a,b)=>b[1]-a[1]).slice(0,5);
+  const periodLabel = {month:'This Month', last_month:'Last Month', '3m':'Last 3 Months', '6m':'Last 6 Months', year:'This Year'}[statementPeriod];
+  const dateStr = new Date().toLocaleDateString('en-KE', { day:'numeric', month:'long', year:'numeric' });
+
+  const el = document.getElementById('statementResult');
+  el.innerHTML = `
+    <div class="s-header">
+      <div class="s-app">Evans Mpesa Ledger</div>
+      <div class="s-period">Income Statement — ${periodLabel}</div>
+      <div class="s-period">Generated ${dateStr}</div>
+    </div>
+    <div class="s-row"><span>Total Income</span><span>${fmtKsh(income)}</span></div>
+    <div class="s-row"><span>Total Expenses</span><span>${fmtKsh(expense)}</span></div>
+    <div class="s-row"><span><strong>Net</strong></span><span><strong>${fmtKsh(income-expense)}</strong></span></div>
+    ${topCats.length ? `<div style="margin-top:14px;font-size:12px;color:#555;">Top expense categories</div>` + topCats.map(([c,a])=>`<div class="s-cat">${c}: ${fmtKsh(a)}</div>`).join('') : ''}
+    <div class="s-footer">Generated by Evans Mpesa Ledger — 🇰🇪</div>
+  `;
+  el.style.display = 'block';
+  document.getElementById('statementActions').style.display = 'block';
+}
+async function shareStatement(){
+  const node = document.getElementById('statementResult');
+  if(typeof html2canvas === 'undefined'){ toast('Could not load image generator — check your connection'); return; }
+  try{
+    const canvas = await html2canvas(node, { backgroundColor:'#ffffff', scale:2 });
+    canvas.toBlob(async (blob)=>{
+      const file = new File([blob], 'income-statement.png', { type:'image/png' });
+      if(navigator.share && navigator.canShare && navigator.canShare({ files:[file] })){
+        try{
+          await navigator.share({ files:[file], title:'Income Statement' });
+          return;
+        }catch(e){ /* user cancelled or share failed, fall through to download */ }
+      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'income-statement.png'; a.click();
+      URL.revokeObjectURL(url);
+    }, 'image/png');
+  }catch(e){
+    toast('Could not generate image');
+  }
+}
+document.getElementById('statementModal').addEventListener('click', e=>{
+  if(e.target.id==='statementModal') e.target.classList.remove('open');
+});
+
+// ── QUICK ADD ENTRY (cash fares, fuel, service, etc.) ──
+const ENTRY_PRESETS = {
+  income: [ { label:'Cash Fare', category:'Cash Fare Income' } ],
+  expense: [
+    { label:'Fuel', category:'Fuel' },
+    { label:'Bike Service', category:'Bike Service' },
+    { label:'Insurance', category:'Insurance' },
+    { label:'License & Permit', category:'License & Permit' },
+    { label:'Loan Payment', category:'Loan' },
+  ],
+};
+function openAddEntryModal(){
+  entryDirection = 'income';
+  entryCategory = '';
+  document.getElementById('entryAmountInput').value = '';
+  document.getElementById('entryNoteInput').value = '';
+  renderEntryDirectionToggle();
+  renderEntryPresets();
+  renderEntryCategorySelect();
+  document.getElementById('addEntryModal').classList.add('open');
+}
+function closeAddEntryModal(){
+  document.getElementById('addEntryModal').classList.remove('open');
+}
+function renderEntryDirectionToggle(){
+  const el = document.getElementById('entryDirectionToggle');
+  el.innerHTML = [['income','Income'],['expense','Expense']]
+    .map(([v,l])=>`<div class="period-chip ${entryDirection===v?'active':''}" onclick="setEntryDirection('${v}')">${l}</div>`).join('');
+}
+function setEntryDirection(dir){
+  entryDirection = dir;
+  entryCategory = '';
+  renderEntryDirectionToggle();
+  renderEntryPresets();
+  renderEntryCategorySelect();
+}
+function renderEntryPresets(){
+  const el = document.getElementById('entryPresets');
+  el.innerHTML = ENTRY_PRESETS[entryDirection].map(p=>
+    `<div class="preset-chip ${entryCategory===p.category?'active':''}" onclick="pickEntryPreset('${p.category.replace(/'/g,"\\'")}')">${p.label}</div>`
+  ).join('');
+}
+function pickEntryPreset(category){
+  entryCategory = category;
+  renderEntryPresets();
+  document.getElementById('entryCategorySelect').value = category;
+  onEntryCategoryChange();
+}
+function renderEntryCategorySelect(){
+  const sel = document.getElementById('entryCategorySelect');
+  const relevant = entryDirection==='income'
+    ? ['Cash Fare Income','Other Income','RidaSwift Business','Swift Shopper Business','Family Support','Cash Deposit']
+    : COMMON_CATEGORIES.filter(c=>!['Cash Fare Income','Other Income'].includes(c));
+  sel.innerHTML = relevant.map(c=>`<option value="${c}">${c}</option>`).join('');
+  if(entryCategory) sel.value = entryCategory;
+  onEntryCategoryChange();
+}
+function onEntryCategoryChange(){
+  const cat = document.getElementById('entryCategorySelect').value;
+  const wrap = document.getElementById('entryLoanPickerWrap');
+  if(cat==='Loan' && loansList.length>0){
+    wrap.style.display = 'block';
+    document.getElementById('entryLoanSelect').innerHTML = loansList.map(l=>`<option value="${l.id}">${l.name}</option>`).join('');
+  } else {
+    wrap.style.display = 'none';
+  }
+}
+async function saveManualEntry(){
+  const amount = Number(document.getElementById('entryAmountInput').value);
+  const note = document.getElementById('entryNoteInput').value.trim();
+  const category = document.getElementById('entryCategorySelect').value;
+  if(!amount || amount<=0){ toast('Enter a valid amount'); return; }
+  const fb = window.LEDGER_FB;
+  const now = new Date();
+  const record = {
+    parsed: true,
+    manual: true,
+    type: 'manual',
+    direction: entryDirection,
+    amount,
+    counterpartyName: note || (entryDirection==='income' ? 'Cash income' : 'Cash expense'),
+    category,
+    categorySource: 'manual',
+    code: null,
+    balance: null,
+    cost: 0,
+    date: now.toLocaleDateString('en-GB'),
+    time: now.toLocaleTimeString('en-US', { hour:'numeric', minute:'2-digit' }),
+    rawText: 'Manually added entry',
+    receivedAt: now.getTime(),
+  };
+  if(category==='Loan' && document.getElementById('entryLoanPickerWrap').style.display==='block'){
+    record.loanId = document.getElementById('entryLoanSelect').value;
+  }
+  await fb.addDoc(fb.collection(fb.db,'transactions'), record);
+  closeAddEntryModal();
+  toast('Entry added');
+}
+document.getElementById('addEntryModal').addEventListener('click', e=>{
+  if(e.target.id==='addEntryModal') e.target.classList.remove('open');
+});
+
+// ── END-OF-DAY REMINDER ──
+// Reminder time is per-device (localStorage), not synced across phones.
+function todayStr(){ return new Date().toISOString().slice(0,10); }
+function getReminderTime(){ return localStorage.getItem('eodReminderTime') || ''; }
+function renderReminderControl(){
+  const el = document.getElementById('reminderControl');
+  const time = getReminderTime();
+  const notifState = (typeof Notification !== 'undefined') ? Notification.permission : 'unsupported';
+  el.innerHTML = `
+    <div style="font-size:13px;color:#C5C5CD;margin-bottom:10px;">Get a nudge to log today's cash fares and expenses before bed.</div>
+    <input type="time" id="reminderTimeInput" value="${time}">
+    <button class="btn green" style="display:inline-block;width:auto;padding:8px 16px;" onclick="enableReminder()">Enable</button>
+    ${time ? `<div class="progress-sub" style="margin-top:8px;">Set for ${time}${notifState==='granted'?' — notifications on':notifState==='denied'?' — notifications blocked, in-app reminder only':' — allow notifications for a device alert'}</div>` : ''}
+  `;
+}
+async function enableReminder(){
+  const time = document.getElementById('reminderTimeInput').value;
+  if(!time){ toast('Pick a time first'); return; }
+  localStorage.setItem('eodReminderTime', time);
+  if(typeof Notification !== 'undefined' && Notification.permission === 'default'){
+    await Notification.requestPermission();
+  }
+  renderReminderControl();
+  scheduleReminderNotification();
+  toast('Reminder set for ' + time);
+}
+let reminderTimeoutId = null;
+function scheduleReminderNotification(){
+  if(reminderTimeoutId) clearTimeout(reminderTimeoutId);
+  const time = getReminderTime();
+  if(!time || typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+  const [h,m] = time.split(':').map(Number);
+  const now = new Date();
+  let next = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+  if(next <= now) next.setDate(next.getDate()+1);
+  const ms = next - now;
+  // Note: this only fires while this browser tab/app stays open in the
+  // background — there's no server-side push involved. Reliability
+  // depends on your phone/browser not fully closing the app.
+  reminderTimeoutId = setTimeout(()=>{
+    new Notification('Mpesa Ledger', { body: "Don't forget to log today's cash fares and expenses." });
+    scheduleReminderNotification(); // reschedule for tomorrow
+  }, ms);
+}
+function checkEodReminder(){
+  const time = getReminderTime();
+  if(!time) return;
+  const [h,m] = time.split(':').map(Number);
+  const now = new Date();
+  const threshold = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0);
+  const dismissedDate = localStorage.getItem('eodDismissedDate');
+  if(now >= threshold && dismissedDate !== todayStr()){
+    document.getElementById('eodBanner').classList.add('show');
+  }
+  scheduleReminderNotification();
+}
+function dismissEodBanner(){
+  localStorage.setItem('eodDismissedDate', todayStr());
+  document.getElementById('eodBanner').classList.remove('show');
+}
+
+// ── EDIT / DELETE TRANSACTION ──
+function openEditModal(txId, name, amount){
+  editingTxId = txId;
+  document.getElementById('editNameInput').value = name || '';
+  document.getElementById('editAmountInput').value = amount || '';
+  document.getElementById('editModal').classList.add('open');
+}
+function closeEditModal(){
+  document.getElementById('editModal').classList.remove('open');
+}
+async function saveEdit(){
+  const name = document.getElementById('editNameInput').value.trim();
+  const amount = Number(document.getElementById('editAmountInput').value);
+  if(!name || !amount || amount<=0){ toast('Enter a valid name and amount'); return; }
+  const fb = window.LEDGER_FB;
+  await fb.updateDoc(fb.doc(fb.db,'transactions',editingTxId), { counterpartyName: name, amount });
+  closeEditModal();
+  toast('Transaction updated');
+}
+document.getElementById('editModal').addEventListener('click', e=>{
+  if(e.target.id==='editModal') e.target.classList.remove('open');
+});
+
+async function confirmDelete(txId, amount){
+  if(!confirm(`Delete this Ksh${amount} transaction? This can't be undone.`)) return;
+  const fb = window.LEDGER_FB;
+  await fb.deleteDoc(fb.doc(fb.db,'transactions',txId));
+  toast('Transaction deleted');
+}
+
+// ── CSV EXPORT ──
+function exportCSV(){
+  let filtered = allTx;
+  if(activeFilter==='income') filtered = allTx.filter(t=>t.direction==='income');
+  else if(activeFilter==='expense') filtered = allTx.filter(t=>t.direction==='expense');
+  else if(activeFilter==='unparsed') filtered = allTx.filter(t=>!t.parsed);
+  else if(activeFilter!=='all') filtered = allTx.filter(t=>t.category===activeFilter);
+  if(viewScope==='business') filtered = filtered.filter(t=>BUSINESS_CATEGORIES.includes(t.category));
+  else if(viewScope==='personal') filtered = filtered.filter(t=>!BUSINESS_CATEGORIES.includes(t.category));
+  if(searchQuery){
+    filtered = filtered.filter(t => (t.counterpartyName||'').toLowerCase().includes(searchQuery) || (t.rawText||'').toLowerCase().includes(searchQuery));
+  }
+  if(selectedPeriodRange){
+    filtered = filtered.filter(t => (t.receivedAt||0) >= selectedPeriodRange.start && (t.receivedAt||0) < selectedPeriodRange.end);
+  }
+  if(filtered.length===0){ toast('Nothing to export'); return; }
+
+  const header = ['Date','Time','Name','Direction','Amount','Category','Code'];
+  const rows = filtered.map(t => [
+    t.date||'', t.time||'', (t.counterpartyName||'').replace(/,/g,' '), t.direction||'', t.amount||'', (t.category||'').replace(/,/g,' '), t.code||''
+  ]);
+  const csv = [header, ...rows].map(r => r.map(v => `"${String(v).replace(/"/g,'""')}"`).join(',')).join('\n');
+  const blob = new Blob([csv], { type:'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `mpesa-ledger-${Date.now()}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ── RECATEGORIZE ──
+const COMMON_CATEGORIES = ['Groceries','Transport','Bills - Electricity','Bills - Water','Bills - Internet','Airtime & Data','Health','Rent','School Fees','RidaSwift Business','Swift Shopper Business','Sacco / Chama','Loan','Fuel','Bike Service','Insurance','License & Permit','Cash Fare Income','Cash Withdrawal','Cash Deposit','Family Support','Other Income','Other Expense'];
+
+function openCatModal(txId, counterparty, needsDirection, currentDirection){
+  editingTxId = txId;
+  editingCounterparty = counterparty;
+  editingNeedsDirection = !!needsDirection;
+  pickedDirection = currentDirection || null;
+  const opts = document.getElementById('catOptions');
+  opts.innerHTML = COMMON_CATEGORIES.map(c=>`<div class="cat-option" onclick="pickCategory(this,'${c.replace(/'/g,"\\'")}')">${c}</div>`).join('');
+  document.getElementById('newCatInput').value='';
+  const picker = document.getElementById('directionPicker');
+  if(editingNeedsDirection){
+    picker.style.display='block';
+    document.getElementById('dirIncomeBtn').classList.toggle('selected', pickedDirection==='income');
+    document.getElementById('dirExpenseBtn').classList.toggle('selected', pickedDirection==='expense');
+  } else {
+    picker.style.display='none';
+  }
+  document.getElementById('catModal').classList.add('open');
+}
+function pickDirection(dir){
+  pickedDirection = dir;
+  document.getElementById('dirIncomeBtn').classList.toggle('selected', dir==='income');
+  document.getElementById('dirExpenseBtn').classList.toggle('selected', dir==='expense');
+}
+let pickedCategory = null;
+function pickCategory(el, cat){
+  document.querySelectorAll('.cat-option').forEach(o=>o.classList.remove('selected'));
+  el.classList.add('selected');
+  pickedCategory = cat;
+  document.getElementById('newCatInput').value = cat;
+  updateCatLoanPicker();
+}
+function updateCatLoanPicker(){
+  const cat = document.getElementById('newCatInput').value.trim();
+  const wrap = document.getElementById('catLoanPickerWrap');
+  if(cat==='Loan' && loansList.length>0){
+    wrap.style.display = 'block';
+    document.getElementById('catLoanSelect').innerHTML = loansList.map(l=>`<option value="${l.id}">${l.name}</option>`).join('');
+  } else {
+    wrap.style.display = 'none';
+  }
+}
+document.getElementById('newCatInput').addEventListener('input', updateCatLoanPicker);
+async function saveCategory(){
+  const cat = document.getElementById('newCatInput').value.trim();
+  if(!cat){ toast('Enter a category'); return; }
+  if(editingNeedsDirection && !pickedDirection){ toast('Choose Income or Expense'); return; }
+  const fb = window.LEDGER_FB;
+  const updateData = { category: cat, categorySource:'manual' };
+  if(editingNeedsDirection) updateData.direction = pickedDirection;
+  if(cat==='Loan' && document.getElementById('catLoanPickerWrap').style.display==='block'){
+    updateData.loanId = document.getElementById('catLoanSelect').value;
+  }
+  await fb.updateDoc(fb.doc(fb.db,'transactions',editingTxId), updateData);
+  try{
+    const body = { transactionId: editingTxId, category: cat, counterpartyName: editingCounterparty };
+    if(editingNeedsDirection) body.direction = pickedDirection;
+    await fetch('/api/recategorize', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify(body)
+    });
+  }catch(e){ console.error(e); }
+  document.getElementById('catModal').classList.remove('open');
+  toast('Updated');
+}
+document.getElementById('catModal').addEventListener('click', e=>{
+  if(e.target.id==='catModal') e.target.classList.remove('open');
+});
+
+// ── INSTALL PROMPT ──
+let deferredInstallPrompt = null;
+window.addEventListener('beforeinstallprompt', (e)=>{
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  if(!localStorage.getItem('ml_install_dismissed')){
+    document.getElementById('installBanner').classList.add('show');
+  }
+});
+function triggerInstall(){
+  document.getElementById('installBanner').classList.remove('show');
+  if(deferredInstallPrompt){
+    deferredInstallPrompt.prompt();
+    deferredInstallPrompt.userChoice.then(()=>{ deferredInstallPrompt = null; });
+  }
+}
+function dismissInstall(){
+  document.getElementById('installBanner').classList.remove('show');
+  localStorage.setItem('ml_install_dismissed','1');
+}
+</script>
+</body>
+</html>
